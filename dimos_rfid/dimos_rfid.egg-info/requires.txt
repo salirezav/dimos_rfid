@@ -1,0 +1,5 @@
+dimos[base]
+requests>=2.28
+
+[unitree]
+dimos[unitree]

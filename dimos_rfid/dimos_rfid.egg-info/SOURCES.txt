@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+dimos_rfid.egg-info/PKG-INFO
+dimos_rfid.egg-info/SOURCES.txt
+dimos_rfid.egg-info/dependency_links.txt
+dimos_rfid.egg-info/requires.txt
+dimos_rfid.egg-info/top_level.txt

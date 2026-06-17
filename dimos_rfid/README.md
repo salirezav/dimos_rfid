@@ -1,0 +1,487 @@
+# DimOS RFID module (`dimos_rfid`)
+
+DimOS integration for the **Vulcan RFID Titanium** UHF reader on a Unitree Go2. This package wraps the existing [`rfid scanner python`](../rfid%20scanner%20python/) code and exposes tag reads as a first-class DimOS **Module** with LCM streams, Rerun visualization, and optional agent skills.
+
+---
+
+## Table of contents
+
+- [Design overview](#design-overview)
+- [How it works](#how-it-works)
+- [Package contents](#package-contents)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [DimOS integration](#dimos-integration)
+- [Running](#running)
+- [Connection modes](#connection-modes)
+- [Blueprints](#blueprints)
+- [Module API](#module-api)
+- [Message types](#message-types)
+- [Environment variables](#environment-variables)
+- [Visualization](#visualization)
+- [Extending the module](#extending-the-module)
+- [Troubleshooting](#troubleshooting)
+
+---
+
+## Design overview
+
+### Two-process architecture
+
+RFID hardware access and DimOS run on **different machines**:
+
+| Process | Host | Responsibility |
+|---------|------|----------------|
+| `rfid_scanner_server.py` | **Go2 onboard** | Talks to reader at `192.168.123.2`; serves HTTP API on `:8765` |
+| `RfidModule` (this package) | **Linux laptop** | Polls HTTP API; publishes tags into DimOS |
+
+```
+Reader (192.168.123.2)
+    │  Keonn AdvanNet
+    ▼
+rfid_service.RfidScanner  ──in-process──►  rfid_scanner_server.py
+                                                    │
+                                          HTTP :8765/api/v1
+                                                    │
+                                                    ▼
+                                          RfidModule (DimOS)
+                                                    │
+                                          LCM /rfid/tags
+                                                    │
+                                    ┌───────────────┼───────────────┐
+                                    ▼               ▼               ▼
+                              RerunBridge    Other modules    MCP agent skills
+```
+
+The laptop never needs Layer-2 access to `192.168.123.2` when using **HTTP mode** (the default). Only the dog must be on the same Ethernet segment as the reader.
+
+### Why a separate package?
+
+DimOS blueprints are discovered from Python files inside the `dimos` package tree (`dimos/robot/all_blueprints.py`). This repo keeps RFID code in `dimos_rfid/` (outside the upstream `dimos` distribution) and uses `integrate_with_dimos.sh` to vendor it into `dimos/hardware/sensors/rfid/` at install time. That gives you:
+
+- Editable development in `dimos_rfid/`
+- Standard `dimos run unitree-go2-rfid` CLI
+- No fork of the upstream DimOS repository
+
+---
+
+## How it works
+
+### `RfidModule` lifecycle
+
+1. **`start()`** — reads `RFID_CONNECTION_MODE` (`http` or `direct`).
+2. **HTTP mode (default)** — starts a reactive poll loop at `poll_hz` (default 2 Hz). Each tick `GET`s `{RFID_API_BASE}/tags` (or equivalent endpoint via `rfid_service.to_api_payload()` shape).
+3. **Direct mode** — imports `rfid_service.RfidScanner` in-process, connects to the reader IP, registers an `on_tag` callback for live events.
+4. **`rfid_tags.publish()`** — emits `RfidTagArray` on the module's `Out` stream.
+5. **LCM transport** — blueprint maps `rfid_tags` → `/rfid/tags` so any DimOS module or `dimos topic echo` can subscribe.
+6. **`to_rerun()`** — `RfidTagArray` implements Rerun conversion; `RerunBridgeModule` renders tag status as text logs in the 3D viewer.
+7. **Agent skills** — `@skill` methods (`get_active_rfid_tags`, etc.) are exposed when the blueprint includes `McpServer` (agentic variant).
+
+### Static transform
+
+`RfidModule` publishes a static transform `base_link → rfid_antenna` (configurable Z offset, default 0.25 m) for future localization and Rerun frame alignment.
+
+### Data flow from API to DimOS
+
+```python
+# HTTP response (from rfid_scanner_server.py)
+{"tags": [{"epc": "...", "rssi_dbm": -42, "in_range": true, ...}], ...}
+
+# Converted in RfidModule
+array = RfidTagArray.from_api_payload(payload)
+
+# Published to LCM
+self.rfid_tags.publish(array)   # → /rfid/tags#dimos_rfid.msgs.RfidTagArray
+```
+
+---
+
+## Package contents
+
+| File | Purpose |
+|------|---------|
+| `rfid_module.py` | `RfidModule` + `RfidModuleConfig` — core DimOS Module |
+| `msgs.py` | `RfidTag`, `RfidTagArray` dataclasses with `to_rerun()` |
+| `_backend.py` | Locates `rfid scanner python/` and constructs `RfidScanner` for direct mode |
+| `demo_blueprint.py` | `rfid_demo` — RFID + Rerun only |
+| `go2_blueprints.py` | `unitree_go2_rfid` — Go2 spatial stack + RFID |
+| `go2_agentic_blueprints.py` | `unitree_go2_rfid_agentic` — adds MCP agent (separate file to avoid import-time agent deps) |
+| `__main__.py` | `python -m dimos_rfid {demo,go2,go2-agentic}` runner |
+| `integrate_with_dimos.sh` | Vendors into `dimos` package + regenerates blueprint registry |
+| `pyproject.toml` | Package metadata (`dimos-rfid`) |
+
+---
+
+## Prerequisites
+
+1. **DimOS** with Unitree extras on a Linux machine:
+
+   ```bash
+   uv pip install 'dimos[base,unitree]'
+   ```
+
+2. **`rfid_scanner_server.py` running on the Go2** (recommended):
+
+   ```bash
+   cd "rfid scanner python"
+   python3 rfid_scanner_server.py
+   ```
+
+3. **This package** installed into the same virtualenv as DimOS (see below).
+
+---
+
+## Installation
+
+From the repository root:
+
+```bash
+cd /path/to/Dimos
+source .venv/bin/activate
+
+uv pip install -e "./dimos_rfid[unitree]"
+```
+
+The `[unitree]` extra ensures `dimos[unitree]` is available for Go2 blueprints.
+
+---
+
+## DimOS integration
+
+### Recommended: `integrate_with_dimos.sh`
+
+```bash
+source .venv/bin/activate
+./dimos_rfid/integrate_with_dimos.sh
+```
+
+The script:
+
+1. Installs `dimos-rfid` editable from `dimos_rfid/`
+2. Copies module files into `{dimos}/hardware/sensors/rfid/` inside your environment's `site-packages`
+3. Rewrites imports from `dimos_rfid.*` → `dimos.hardware.sensors.rfid.*` in the vendored copies (so `dimos run` does not depend on a separate import path)
+4. Regenerates `dimos/robot/all_blueprints.py` by scanning for `autoconnect(...)` assignments
+5. Verifies `rfid-demo` and `unitree-go2-rfid` import cleanly
+
+**Re-run after every `dimos` package upgrade**, because pip overwrites `site-packages`.
+
+### What gets registered
+
+| Blueprint variable | CLI name | Module path after integration |
+|--------------------|----------|-------------------------------|
+| `rfid_demo` | `rfid-demo` | `dimos.hardware.sensors.rfid.demo_blueprint:rfid_demo` |
+| `unitree_go2_rfid` | `unitree-go2-rfid` | `dimos.hardware.sensors.rfid.go2_blueprints:unitree_go2_rfid` |
+| `unitree_go2_rfid_agentic` | `unitree-go2-rfid-agentic` | `dimos.hardware.sensors.rfid.go2_agentic_blueprints:unitree_go2_rfid_agentic` |
+
+DimOS CLI naming rule: `snake_case` blueprint variables become `kebab-case` commands.
+
+### Alternative integration paths
+
+#### Option A — No CLI registration (`python -m dimos_rfid`)
+
+```bash
+export ROBOT_IP=<go2-ip>
+export RFID_API_BASE=http://<go2-ip>:8765/api/v1
+python -m dimos_rfid go2
+```
+
+Calls `ModuleCoordinator.build(blueprint).loop()` — identical runtime to `dimos run`, without touching `all_blueprints.py`.
+
+#### Option B — Programmatic
+
+```python
+from dimos.core.coordination.module_coordinator import ModuleCoordinator
+from dimos_rfid.go2_blueprints import unitree_go2_rfid
+
+ModuleCoordinator.build(unitree_go2_rfid).loop()
+```
+
+#### Option C — Compose into your own blueprint
+
+```python
+from dimos.core.coordination.blueprints import autoconnect
+from dimos_rfid.rfid_module import RfidModule
+from dimos.robot.unitree.go2.blueprints.smart.unitree_go2_spatial import unitree_go2_spatial
+
+my_stack = autoconnect(
+    unitree_go2_spatial,
+    RfidModule.blueprint(api_base="http://10.42.0.1:8765/api/v1"),
+)
+```
+
+#### Option D — Upstream DimOS source tree
+
+If you develop against a `dimos` git clone, you can symlink or copy this package under `dimos/hardware/sensors/rfid/` and run:
+
+```bash
+pytest dimos/robot/test_all_blueprints_generation.py
+```
+
+Blueprint files must live under the `dimos/` package and use top-level `autoconnect(...)` assignments (not inside functions) for auto-discovery.
+
+---
+
+## Running
+
+### Environment
+
+```bash
+export ROBOT_IP=<go2-wifi-ip>
+export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
+```
+
+Use the dog's **Wi‑Fi / hotspot IP**, not the reader's Ethernet IP (`192.168.123.2`).
+
+### Commands
+
+```bash
+# Full Go2 + RFID (recommended)
+dimos run unitree-go2-rfid
+
+# RFID viewer only
+dimos run rfid-demo
+
+# With web-based visualization
+dimos --viewer rerun-web run unitree-go2-rfid
+
+# Without dimos CLI registration
+python -m dimos_rfid go2
+```
+
+### Verify
+
+```bash
+# While DimOS is running
+dimos topic echo /rfid/tags
+
+# Agentic blueprint (if MCP server is up)
+dimos mcp call get_active_rfid_tags
+dimos agent-send "what RFID tags do you see?"
+```
+
+---
+
+## Connection modes
+
+| Mode | When to use | Configuration |
+|------|-------------|---------------|
+| **`http`** (default) | `rfid_scanner_server.py` on the dog | `RFID_API_BASE=http://<dog-ip>:8765/api/v1` |
+| **`direct`** | DimOS host can reach `192.168.123.2` directly | `RFID_CONNECTION_MODE=direct` |
+
+### HTTP mode (recommended)
+
+- Server runs on the Go2 alongside the reader
+- DimOS polls REST endpoints every `poll_hz` seconds
+- No `rfid scanner python` code needed on the laptop
+
+### Direct mode
+
+- `RfidModule` imports `rfid_service.RfidScanner` in-process via `_backend.py`
+- Requires `rfid scanner python/` on disk; located automatically from:
+  1. `$RFID_SCANNER_PYTHON_DIR` if set
+  2. Sibling of `dimos_rfid/` (`../rfid scanner python`)
+  3. `~/projects/Dimos/rfid scanner python`
+- DimOS machine must have network route to `192.168.123.2` (unusual for laptop setups)
+
+---
+
+## Blueprints
+
+### `rfid_demo`
+
+```python
+autoconnect(
+    RfidModule.blueprint(...),
+    RerunBridgeModule.blueprint(),
+).transports({("rfid_tags", RfidTagArray): pLCMTransport("/rfid/tags")})
+```
+
+RFID tags + Rerun text overlay. No robot required.
+
+### `unitree_go2_rfid`
+
+```python
+autoconnect(
+    unitree_go2,   # SLAM, navigation, mapping (same as `dimos run unitree-go2`)
+    RfidModule.blueprint(...),
+).transports({("rfid_tags", RfidTagArray): pLCMTransport("/rfid/tags")})
+```
+
+Inherits everything from `unitree_go2`:
+
+- WebRTC connection to Go2 (`GO2Connection`)
+- Voxel mapping, costmaps, A* planner, frontier exploration, patrolling
+- Rerun 3D viewer + websocket command center (`:7779`)
+
+Does **not** include `unitree_go2_spatial` extras (`SpatialMemory`, `SecurityModule` / SAM2). That keeps it aligned with `dimos run unitree-go2`, which does not require the `sam2` package.
+
+### `unitree_go2_rfid_agentic`
+
+Same as above plus `McpServer`, `McpClient`, and `_common_agentic` for LLM agent interaction. Requires full DimOS agent/web dependencies. Kept in a separate file (`go2_agentic_blueprints.py`) so importing `unitree_go2_rfid` does not pull agent imports at module load time.
+
+---
+
+## Module API
+
+### Output stream
+
+| Stream | Type | LCM topic |
+|--------|------|-----------|
+| `rfid_tags` | `Out[RfidTagArray]` | `/rfid/tags` |
+
+Subscribe from another DimOS module:
+
+```python
+from dimos.core.module import Module
+from dimos.core.stream import In
+from dimos_rfid.msgs import RfidTagArray
+
+class MyListener(Module):
+    rfid_tags: In[RfidTagArray]
+
+    @rpc
+    def start(self):
+        super().start()
+        self.rfid_tags.subscribe(self._on_tags)
+
+    def _on_tags(self, msg: RfidTagArray):
+        for tag in msg.active_tags():
+            print(tag.epc, tag.rssi_dbm)
+```
+
+### Agent skills
+
+Available when the running blueprint includes `McpServer`:
+
+| Skill | Description |
+|-------|-------------|
+| `get_active_rfid_tags()` | Human-readable list of in-range tags with RSSI |
+| `lookup_rfid_tag(epc)` | Look up one tag by EPC hex string |
+| `get_rfid_reader_status()` | Reader connection health and tag counts |
+
+### Configuration (`RfidModuleConfig`)
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `connection_mode` | `http` | `http` or `direct` |
+| `api_base` | `$RFID_API_BASE` or `http://localhost:8765/api/v1` | HTTP API root |
+| `reader_host` | `192.168.123.2` | Reader IP (direct mode) |
+| `reader_user` / `reader_password` | `admin` / `admin` | Digest auth (direct mode) |
+| `poll_hz` | `2.0` | HTTP poll rate |
+| `stale_seconds` | `5.0` | Tag staleness threshold |
+| `antenna_frame_id` | `rfid_antenna` | TF frame name |
+| `antenna_offset_z` | `0.25` | Antenna height above `base_link` (meters) |
+
+---
+
+## Message types
+
+### `RfidTag`
+
+Single tag observation:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `epc` | `str` | Electronic Product Code (hex) |
+| `rssi_dbm` | `float \| None` | Received signal strength |
+| `antenna` | `int \| None` | Antenna port |
+| `frequency_khz` | `int \| None` | Carrier frequency |
+| `read_count` | `int` | Session read count |
+| `in_range` | `bool` | Seen within `stale_seconds` |
+| `last_seen` | `float` | Unix timestamp |
+| `name` | `str` | Short display label |
+
+### `RfidTagArray`
+
+Batch message for one publish cycle. Implements `to_rerun()` → `rr.TextLog` listing in-range tags for the Rerun bridge.
+
+---
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RFID_API_BASE` | `http://localhost:8765/api/v1` | HTTP API base URL |
+| `RFID_CONNECTION_MODE` | `http` | `http` or `direct` |
+| `RFID_SCANNER_PYTHON_DIR` | (auto-detect) | Path to `rfid scanner python/` for direct mode |
+| `VULCAN_READER_HOST` | `192.168.123.2` | Reader IP (direct mode) |
+| `VULCAN_READER_USER` | `admin` | Digest auth user |
+| `VULCAN_READER_PASS` | `admin` | Digest auth password |
+| `ROBOT_IP` | — | Go2 Wi‑Fi IP (DimOS `GlobalConfig`) |
+
+Reader-side variables (`RFID_WEB_PORT`, `RFID_STALE_SECONDS`, etc.) are documented in [`rfid scanner python/RFID_SCANNER.md`](../rfid%20scanner%20python/RFID_SCANNER.md).
+
+---
+
+## Visualization
+
+### Rerun (default)
+
+`RfidTagArray.to_rerun()` produces a `TextLog` archetype. When `RerunBridgeModule` is in the blueprint (all Go2 stacks include it), active tags appear in the Rerun log panel.
+
+Future work: `Points3D` / `Arrows3D` at estimated world positions once localization is implemented.
+
+### Debug without Rerun
+
+```bash
+dimos topic echo /rfid/tags
+```
+
+### RFID-only demo
+
+`rfid-demo` uses `RerunBridgeModule` directly (no Go2). Useful for verifying the HTTP API connection before involving the robot.
+
+---
+
+## Extending the module
+
+### Planned: `RfidLocalizerModule`
+
+```
+rfid_tags (RfidTagArray)  ──┐
+odom (PoseStamped)        ──┼──► RfidLocalizerModule ──► tag poses in world frame
+                            │
+static TF base_link→antenna ┘
+```
+
+Fuse RSSI + robot pose to estimate tag locations; publish to Rerun and `SpatialMemory`.
+
+### Adding to a custom blueprint
+
+```python
+from dimos.core.coordination.blueprints import autoconnect
+from dimos.core.transport import pLCMTransport
+from dimos_rfid.rfid_module import RfidModule
+from dimos_rfid.msgs import RfidTagArray
+
+my_blueprint = autoconnect(
+    # ... your modules ...
+    RfidModule.blueprint(api_base="http://10.0.0.1:8765/api/v1"),
+).transports({
+    ("rfid_tags", RfidTagArray): pLCMTransport("/rfid/tags"),
+})
+```
+
+After adding new top-level `autoconnect` assignments under `dimos/`, regenerate the registry (integration script or `pytest dimos/robot/test_all_blueprints_generation.py`).
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `No module named 'dimos_rfid'` on `dimos run` | Integration not run or overwritten by dimos upgrade | `./dimos_rfid/integrate_with_dimos.sh` |
+| No tags on `/rfid/tags` | Server not running or wrong `RFID_API_BASE` | `curl http://<dog>:8765/api/v1/health` |
+| `RFID reader unreachable` in logs | Dog server down or network isolation | Start `rfid_scanner_server.py` on Go2 |
+| Tags in API but not in Rerun | `RerunBridgeModule` not started yet | Wait for full startup; check `dimos log -f` |
+| `unitree-go2-rfid-agentic` import error | Missing DimOS web/agent packages | Use `unitree-go2-rfid` or install full dimos extras |
+| `No module named 'sam2'` | Old spatial-based blueprint or `unitree-go2-spatial` | Use current `unitree-go2-rfid` (based on `unitree_go2`); re-run `integrate_with_dimos.sh` |
+| Direct mode `FileNotFoundError` | `rfid scanner python/` not found | Set `RFID_SCANNER_PYTHON_DIR` |
+
+---
+
+## Related documentation
+
+- [Project README](../README.md) — full setup from scratch
+- [RFID scanner server](../rfid%20scanner%20python/RFID_SCANNER.md) — hardware & onboard server
+- [RFID HTTP API](../rfid%20scanner%20python/RFID_API.md) — endpoint reference

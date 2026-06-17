@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: dimos-rfid
+Version: 0.1.0
+Summary: Vulcan RFID scanner module for DimOS
+Requires-Python: >=3.10
+Requires-Dist: dimos[base]
+Requires-Dist: requests>=2.28
+Provides-Extra: unitree
+Requires-Dist: dimos[unitree]; extra == "unitree"

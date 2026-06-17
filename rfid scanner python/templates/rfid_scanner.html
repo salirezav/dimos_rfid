@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RFID Scanner</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 1.5rem;
+      background: #0f1419;
+      color: #e7ecf3;
+    }
+    h1 { margin: 0 0 0.25rem; font-size: 1.5rem; }
+    .sub { color: #8b98a5; margin-bottom: 1.25rem; font-size: 0.9rem; }
+    .status {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+    }
+    .pill {
+      background: #1a2332;
+      border: 1px solid #2a3647;
+      border-radius: 999px;
+      padding: 0.35rem 0.75rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+    .pill.ok { border-color: #1f6f4a; color: #6ee7a8; }
+    .pill.warn { border-color: #7c5e10; color: #fbbf24; }
+    .pill.err { border-color: #7f2d2d; color: #fca5a5; }
+    .dot {
+      width: 0.55rem;
+      height: 0.55rem;
+      border-radius: 50%;
+      background: currentColor;
+      flex-shrink: 0;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #151d28;
+      border: 1px solid #2a3647;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.65rem 0.85rem;
+      border-bottom: 1px solid #243041;
+      vertical-align: middle;
+    }
+    th {
+      background: #1a2332;
+      color: #9fb0c3;
+      font-weight: 600;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    tr:last-child td { border-bottom: none; }
+    tbody tr.tag-live:hover td { background: #1c2735; }
+    tbody tr.tag-offline td {
+      color: #6b7a8c;
+      background: #121820;
+    }
+    tbody tr.tag-offline:hover td { background: #161e28; }
+    .mono { font-family: ui-monospace, monospace; font-size: 0.85rem; }
+    .rssi-strong { color: #6ee7a8; }
+    .rssi-mid { color: #fbbf24; }
+    .rssi-weak { color: #f87171; }
+    .tag-offline .rssi-strong,
+    .tag-offline .rssi-mid,
+    .tag-offline .rssi-weak { color: #6b7a8c; }
+    .empty {
+      text-align: center;
+      padding: 2.5rem;
+      color: #8b98a5;
+    }
+    .tag-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.45rem;
+      font-size: 0.85rem;
+      white-space: nowrap;
+    }
+    .tag-status .icon {
+      width: 1.1rem;
+      height: 1.1rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      font-size: 0.7rem;
+      font-weight: 700;
+      line-height: 1;
+    }
+    .tag-status.live .icon {
+      background: #123524;
+      color: #6ee7a8;
+      box-shadow: 0 0 0 2px rgba(110, 231, 168, 0.2);
+    }
+    .tag-status.offline .icon {
+      background: #2a313c;
+      color: #8b98a5;
+    }
+    .tag-status.live { color: #6ee7a8; }
+    .tag-status.offline { color: #8b98a5; }
+    .name-cell { font-weight: 500; }
+    .tag-offline .name-cell { font-weight: 400; }
+  </style>
+</head>
+<body>
+  <h1>RFID Scanner</h1>
+  <p class="sub">Discovered tags are kept in the list — out-of-range tags move to the bottom</p>
+
+  <div class="status">
+    <span class="pill" id="conn-pill"><span class="dot"></span><span id="conn-text">Connecting…</span></span>
+    <span class="pill" id="count-pill">0 tags</span>
+    <span class="pill" id="time-pill">—</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th>
+        <th>Name</th>
+        <th>ID (EPC)</th>
+        <th>Signal (dBm)</th>
+        <th>Antenna</th>
+        <th>Frequency</th>
+        <th>Reads</th>
+        <th>Last seen</th>
+      </tr>
+    </thead>
+    <tbody id="tag-body">
+      <tr><td colspan="8" class="empty">Scanning… hold tags near the reader.</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    function rssiClass(db, inRange) {
+      if (!inRange || db == null) return "";
+      if (db >= -55) return "rssi-strong";
+      if (db >= -70) return "rssi-mid";
+      return "rssi-weak";
+    }
+
+    function fmtFreq(khz) {
+      if (khz == null) return "—";
+      return (khz / 1000).toFixed(3) + " MHz";
+    }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+
+    function render(data) {
+      const conn = document.getElementById("conn-pill");
+      const connText = document.getElementById("conn-text");
+      if (data.scanner.connected) {
+        connText.textContent = "Reader stream live";
+        conn.className = "pill ok";
+      } else if (data.scanner.error) {
+        connText.textContent = "Stream error — retrying";
+        conn.className = "pill warn";
+      } else {
+        connText.textContent = "Stream idle";
+        conn.className = "pill warn";
+      }
+
+      const active = data.active_count ?? data.tags.filter(t => t.in_range).length;
+      const total = data.count ?? data.tags.length;
+      document.getElementById("count-pill").textContent =
+        active + " in range · " + total + " discovered";
+      document.getElementById("time-pill").textContent =
+        "Updated " + new Date(data.updated_at).toLocaleTimeString();
+
+      const body = document.getElementById("tag-body");
+      if (!data.tags.length) {
+        body.innerHTML =
+          '<tr><td colspan="8" class="empty">No tags discovered yet — move tags near the antennas.</td></tr>';
+        return;
+      }
+
+      body.innerHTML = data.tags.map(t => {
+        const rowClass = t.in_range ? "tag-live" : "tag-offline";
+        const statusClass = t.in_range ? "live" : "offline";
+        const statusLabel = t.in_range ? "In range" : "Out of range";
+        const statusIcon = t.in_range ? "●" : "○";
+        return `
+        <tr class="${rowClass}">
+          <td>
+            <span class="tag-status ${statusClass}" title="${statusLabel}">
+              <span class="icon">${statusIcon}</span>
+              <span>${statusLabel}</span>
+            </span>
+          </td>
+          <td class="name-cell">${esc(t.name)}</td>
+          <td class="mono">${esc(t.epc)}</td>
+          <td class="${rssiClass(t.rssi_dbm, t.in_range)}">${t.rssi_dbm != null ? t.rssi_dbm + " dBm" : "—"}</td>
+          <td>${t.antenna != null ? t.antenna : "—"}</td>
+          <td>${fmtFreq(t.frequency_khz)}</td>
+          <td>${t.read_count ?? "—"}</td>
+          <td>${esc(t.last_seen_iso ?? "—")}</td>
+        </tr>`;
+      }).join("");
+    }
+
+    async function refresh() {
+      try {
+        const res = await fetch("/api/tags");
+        const data = await res.json();
+        render(data);
+      } catch (e) {
+        document.getElementById("conn-text").textContent = "Server unreachable";
+        document.getElementById("conn-pill").className = "pill err";
+      }
+    }
+
+    refresh();
+    setInterval(refresh, 1000);
+  </script>
+</body>
+</html>
