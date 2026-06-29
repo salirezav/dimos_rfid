@@ -55,6 +55,28 @@ def go2_rfid_rerun_blueprint() -> Any:
     )
 
 
+def rfid_only_rerun_blueprint() -> Any:
+    """Standalone RFID layout: tag list only."""
+    import rerun.blueprint as rrb
+
+    if hasattr(rrb, "TextDocumentView"):
+        rfid_view = rrb.TextDocumentView(
+            origin=RFID_RERUN_ENTITY,
+            name="RFID",
+        )
+    else:
+        rfid_view = rrb.TextLogView(
+            origin=RFID_RERUN_ENTITY,
+            name="RFID",
+        )
+
+    return rrb.Blueprint(
+        rfid_view,
+        rrb.TimePanel(state="collapsed"),
+        rrb.SelectionPanel(state="collapsed"),
+    )
+
+
 def _rfid_visual_override(msg: Any) -> Any:
     if hasattr(msg, "to_rerun"):
         return msg.to_rerun()
@@ -68,13 +90,7 @@ def _rfid_static_panel(rr: Any) -> Any:
         return rr.TextLog(RFID_EMPTY_PANEL, level=rr.TextLogLevel.INFO)
 
 
-def go2_rfid_rerun_config() -> dict[str, Any]:
-    """Merge Go2 Rerun settings with RFID panel layout."""
-    from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
-
-    cfg = {**rerun_config}
-    cfg["blueprint"] = go2_rfid_rerun_blueprint
-
+def _add_rfid_panel_config(cfg: dict[str, Any]) -> dict[str, Any]:
     visual_override = dict(cfg.get("visual_override", {}))
     visual_override[RFID_RERUN_ENTITY] = _rfid_visual_override
     cfg["visual_override"] = visual_override
@@ -86,6 +102,23 @@ def go2_rfid_rerun_config() -> dict[str, Any]:
     static = dict(cfg.get("static", {}))
     static[RFID_RERUN_ENTITY] = _rfid_static_panel
     cfg["static"] = static
+
+    return cfg
+
+
+def rfid_only_rerun_config() -> dict[str, Any]:
+    """Rerun settings for the standalone RFID demo."""
+    return _add_rfid_panel_config({"blueprint": rfid_only_rerun_blueprint})
+
+
+def go2_rfid_rerun_config() -> dict[str, Any]:
+    """Merge Go2 Rerun settings with RFID panel layout."""
+    from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
+
+    cfg = {**rerun_config}
+    cfg["blueprint"] = go2_rfid_rerun_blueprint
+
+    cfg = _add_rfid_panel_config(cfg)
 
     if "pubsubs" not in cfg:
         from dimos.protocol.pubsub.impl.lcmpubsub import LCM
