@@ -71,10 +71,7 @@ class RfidModule(Module):
     _scanner: Any = None
     _latest: RfidTagArray | None = None
     _connection_mode: Literal["http", "direct"] = "http"
-    _last_publish_key: tuple[Any, ...] | None = None
     _rerun_connected: bool = False
-    _last_logged_active: int = -1
-    _last_rerun_ts: float = 0.0
 
     def _api_base(self) -> str:
         """Env wins over blueprint config (re-read each poll)."""
@@ -199,30 +196,6 @@ class RfidModule(Module):
                 force=True,
             )
 
-    @staticmethod
-    def _publish_key(array: RfidTagArray) -> tuple[Any, ...]:
-        """Ignore RSSI jitter — only republish LCM when membership changes."""
-        tag_part = tuple(
-            (t.epc, t.in_range)
-            for t in sorted(array.tags, key=lambda x: x.epc)
-        )
-        return (array.connection_status, tag_part)
-
-    def _should_publish(self, array: RfidTagArray) -> bool:
-        key = self._publish_key(array)
-        if key == self._last_publish_key:
-            return False
-        self._last_publish_key = key
-        return True
-
-    def _maybe_refresh_rerun(self, array: RfidTagArray) -> None:
-        """Refresh RFID panel at most 1 Hz even when tag set is unchanged (RSSI updates)."""
-        now = time.monotonic()
-        if now - self._last_rerun_ts < 1.0:
-            return
-        self._last_rerun_ts = now
-        self._log_to_rerun(array)
-
     def _log_to_rerun(self, array: RfidTagArray) -> None:
         """Push tag list straight to the Rerun gRPC server (same recording as the viewer)."""
         try:
@@ -242,29 +215,20 @@ class RfidModule(Module):
             self._rerun_connected = False
             logger.debug("Rerun RFID panel update failed (will retry): %s", exc)
 
+    def _log_tag_details(self, array: RfidTagArray) -> None:
+        details = array.to_terminal_summary()
+        logger.info(
+            "RFID tags: %d active / %d discovered | %s",
+            array.active_count,
+            array.total_count,
+            details,
+        )
+
     def _publish_tags(self, array: RfidTagArray, *, force: bool = False) -> None:
         self._latest = array
-        if not force and not self._should_publish(array):
-            self._maybe_refresh_rerun(array)
-            return
-        if force:
-            self._last_publish_key = self._publish_key(array)
         self.rfid_tags.publish(array)
-        self._last_rerun_ts = time.monotonic()
         self._log_to_rerun(array)
-        if array.active_count != self._last_logged_active:
-            logger.info(
-                "RFID tags in range: %d (of %d discovered)",
-                array.active_count,
-                array.total_count,
-            )
-            self._last_logged_active = array.active_count
-        else:
-            logger.debug(
-                "RFID → /rfid/tags (%d tags, %d in range)",
-                array.total_count,
-                array.active_count,
-            )
+        self._log_tag_details(array)
 
     @skill
     def get_active_rfid_tags(self) -> str:

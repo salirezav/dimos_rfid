@@ -66,6 +66,38 @@ class RfidTagArray:
     def active_tags(self) -> list[RfidTag]:
         return [t for t in self.tags if t.in_range]
 
+    @staticmethod
+    def _display_name(tag: RfidTag) -> str:
+        return tag.name or f"...{tag.epc[-8:].upper()}"
+
+    @staticmethod
+    def _display_rssi(tag: RfidTag) -> str:
+        return f"{tag.rssi_dbm} dBm" if tag.rssi_dbm is not None else "unknown RSSI"
+
+    def to_terminal_summary(self) -> str:
+        """Single-line tag details for logs."""
+        if not self.tags:
+            return "No RFID tags discovered."
+
+        parts = []
+        for tag in sorted(
+            self.tags,
+            key=lambda t: (
+                not t.in_range,
+                -(t.rssi_dbm if t.rssi_dbm is not None else -999),
+                t.epc,
+            ),
+        ):
+            state = "live" if tag.in_range else "seen"
+            antenna = f", ant={tag.antenna}" if tag.antenna is not None else ""
+            reads = f", reads={tag.read_count}" if tag.read_count else ""
+            parts.append(
+                f"{self._display_name(tag)} {state} "
+                f"epc={tag.epc} rssi={self._display_rssi(tag)}{antenna}{reads}"
+            )
+
+        return "; ".join(parts)
+
     def to_markdown_panel(self) -> str:
         """Human-readable tag list for the RFID side panel."""
         in_range = sorted(
@@ -85,7 +117,7 @@ class RfidTagArray:
 
         lines.extend(
             [
-                f"**In range:** {len(in_range)}  ·  **Discovered:** {self.total_count}",
+                f"**In range:** {len(in_range)}  -  **Discovered:** {self.total_count}",
                 "",
             ]
         )
@@ -96,8 +128,8 @@ class RfidTagArray:
             lines.append("| Tag | RSSI | EPC |")
             lines.append("|-----|------|-----|")
             for tag in in_range:
-                name = tag.name or f"…{tag.epc[-8:].upper()}"
-                rssi = f"{tag.rssi_dbm} dBm" if tag.rssi_dbm is not None else "—"
+                name = self._display_name(tag)
+                rssi = self._display_rssi(tag)
                 lines.append(f"| {name} | {rssi} | `{tag.epc}` |")
             lines.append("")
         else:
@@ -108,10 +140,10 @@ class RfidTagArray:
             lines.append("## Out of range (seen earlier)")
             lines.append("")
             for tag in out_of_range[:10]:
-                name = tag.name or f"…{tag.epc[-8:].upper()}"
-                lines.append(f"- {name} — `{tag.epc}`")
+                name = self._display_name(tag)
+                lines.append(f"- {name} - `{tag.epc}`")
             if len(out_of_range) > 10:
-                lines.append(f"- _…and {len(out_of_range) - 10} more_")
+                lines.append(f"- _...and {len(out_of_range) - 10} more_")
 
         return "\n".join(lines)
 
