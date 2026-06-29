@@ -139,18 +139,35 @@ class RfidModule(Module):
         self.rfid_tags.publish(array)
 
     def _start_http_poll(self) -> None:
-        logger.info("RFID HTTP mode: polling %s", self.config.api_base)
+        base = self.config.api_base.rstrip("/")
+        logger.info("RFID HTTP mode: polling %s", base)
+        if not self._verify_http_reachable(base):
+            logger.warning(
+                "RFID polls will retry. If curl works from Windows but not Ubuntu/WSL, "
+                "DimOS cannot reach the Jetson — test: curl %s/health from the same shell "
+                "you use for `dimos run`.",
+                base,
+            )
         interval = 1.0 / self.config.poll_hz
+        self._poll_http()
         self.register_disposable(
             rx.interval(interval).subscribe(lambda _: self._poll_http())
         )
 
-    def _poll_http(self) -> None:
+    def _verify_http_reachable(self, base: str) -> bool:
         try:
-            response = requests.get(
-                f"{self.config.api_base.rstrip('/')}/tags",
-                timeout=2,
-            )
+            response = requests.get(f"{base}/health", timeout=3)
+            response.raise_for_status()
+            logger.info("RFID API reachable at %s", base)
+            return True
+        except requests.RequestException as exc:
+            logger.error("RFID API not reachable at %s: %s", base, exc)
+            return False
+
+    def _poll_http(self) -> None:
+        base = self.config.api_base.rstrip("/")
+        try:
+            response = requests.get(f"{base}/tags/active", timeout=3)
             response.raise_for_status()
             payload = response.json()
             if not payload.get("ok", True) and "tags" not in payload:
@@ -161,8 +178,13 @@ class RfidModule(Module):
             )
             self._latest = array
             self.rfid_tags.publish(array)
+            if array.active_count:
+                logger.info(
+                    "RFID published %d active tag(s) on /rfid/tags",
+                    array.active_count,
+                )
         except requests.RequestException as exc:
-            logger.debug("RFID HTTP poll failed: %s", exc)
+            logger.warning("RFID HTTP poll failed (%s): %s", base, exc)
 
     @skill
     def get_active_rfid_tags(self) -> str:

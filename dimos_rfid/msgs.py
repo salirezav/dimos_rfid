@@ -65,22 +65,22 @@ class RfidTagArray:
     def active_tags(self) -> list[RfidTag]:
         return [t for t in self.tags if t.in_range]
 
-    def to_rerun(self) -> rr.TextLog:
-        """Rendered by RerunBridgeModule on topic /rfid/tags."""
+    def to_rerun(self) -> list[tuple[str, rr.Archetype]]:
+        """Status line in 3D view (camera dots come from RfidOverlayModule)."""
         active = self.active_tags()
         if not active:
-            return rr.TextLog(
-                f"RFID: {self.total_count} discovered, none in range",
-                level=rr.TextLogLevel.INFO,
+            text = f"RFID: {self.total_count} discovered, none in range"
+        else:
+            parts = []
+            for tag in active[:8]:
+                label = tag.name or f"…{tag.epc[-8:].upper()}"
+                rssi = f"{tag.rssi_dbm} dBm" if tag.rssi_dbm is not None else "?"
+                parts.append(f"{label} ({rssi})")
+            suffix = f" +{len(active) - 8} more" if len(active) > 8 else ""
+            text = f"RFID in range ({len(active)}): " + ", ".join(parts) + suffix
+        return [
+            (
+                "world/rfid/status",
+                rr.TextLog(text, level=rr.TextLogLevel.INFO),
             )
-
-        parts = []
-        for tag in active[:12]:
-            label = tag.name or f"…{tag.epc[-8:].upper()}"
-            rssi = f"{tag.rssi_dbm} dBm" if tag.rssi_dbm is not None else "?"
-            parts.append(f"{label} ({rssi})")
-        suffix = f" +{len(active) - 12} more" if len(active) > 12 else ""
-        return rr.TextLog(
-            f"RFID in range ({len(active)}): " + ", ".join(parts) + suffix,
-            level=rr.TextLogLevel.INFO,
-        )
+        ]
