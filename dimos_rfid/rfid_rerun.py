@@ -13,10 +13,17 @@ def go2_rfid_rerun_blueprint() -> Any:
     import rerun as rr
     import rerun.blueprint as rrb
 
-    rfid_view = rrb.TextLogView(
-        origin=RFID_RERUN_ENTITY,
-        name="RFID",
-    )
+    rfid_view: Any
+    if hasattr(rrb, "TextDocumentView"):
+        rfid_view = rrb.TextDocumentView(
+            origin=RFID_RERUN_ENTITY,
+            name="RFID",
+        )
+    else:
+        rfid_view = rrb.TextLogView(
+            origin=RFID_RERUN_ENTITY,
+            name="RFID",
+        )
 
     return rrb.Blueprint(
         rrb.Horizontal(
@@ -46,16 +53,8 @@ def _rfid_visual_override(msg: Any) -> Any:
     return None
 
 
-def _rfid_static_placeholder(rr: Any) -> Any:
-    """Module-level fn (not lambda) — required for DimOS forkserver pickling."""
-    return rr.TextLog(
-        "Waiting for RFID data from /rfid/tags …",
-        level=rr.TextLogLevel.WARN,
-    )
-
-
 def go2_rfid_rerun_config() -> dict[str, Any]:
-    """Merge Go2 Rerun settings with RFID panel + throttle RFID UI updates."""
+    """Merge Go2 Rerun settings with RFID panel layout."""
     from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
 
     cfg = {**rerun_config}
@@ -69,9 +68,7 @@ def go2_rfid_rerun_config() -> dict[str, Any]:
     max_hz[RFID_RERUN_ENTITY] = 1.0
     cfg["max_hz"] = max_hz
 
-    static = dict(cfg.get("static", {}))
-    static[RFID_RERUN_ENTITY] = _rfid_static_placeholder
-    cfg["static"] = static
+    # No static placeholder — RfidModule logs live data directly to Rerun gRPC.
 
     if "pubsubs" not in cfg:
         from dimos.protocol.pubsub.impl.lcmpubsub import LCM

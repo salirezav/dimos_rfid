@@ -25,6 +25,7 @@ from dimos.utils.logging_config import setup_logger
 
 from dimos_rfid._backend import create_direct_scanner
 from dimos_rfid.msgs import RfidTagArray
+from dimos_rfid.rfid_rerun import RFID_RERUN_ENTITY
 
 logger = setup_logger()
 
@@ -71,6 +72,11 @@ class RfidModule(Module):
     _latest: RfidTagArray | None = None
     _connection_mode: Literal["http", "direct"] = "http"
     _last_publish_key: tuple[Any, ...] | None = None
+    _rerun_connected: bool = False
+
+    def _api_base(self) -> str:
+        """Env wins over blueprint config (re-read each poll)."""
+        return os.environ.get("RFID_API_BASE", self.config.api_base).rstrip("/")
 
     @rpc
     def start(self) -> None:
@@ -85,7 +91,7 @@ class RfidModule(Module):
             self._start_direct()
         else:
             self._publish_tags(
-                RfidTagArray(connection_status=f"Polling {self.config.api_base} …"),
+                RfidTagArray(connection_status=f"Polling {self._api_base()} …"),
                 force=True,
             )
             self._start_http_poll()
@@ -143,7 +149,7 @@ class RfidModule(Module):
         self._publish_tags(array)
 
     def _start_http_poll(self) -> None:
-        base = self.config.api_base.rstrip("/")
+        base = self._api_base()
         logger.info("RFID HTTP mode: polling %s", base)
         if not self._verify_http_reachable(base):
             logger.warning(
@@ -169,7 +175,7 @@ class RfidModule(Module):
             return False
 
     def _poll_http(self) -> None:
-        base = self.config.api_base.rstrip("/")
+        base = self._api_base()
         try:
             response = requests.get(f"{base}/tags", timeout=1.5)
             response.raise_for_status()
@@ -206,6 +212,25 @@ class RfidModule(Module):
         self._last_publish_key = key
         return True
 
+    def _log_to_rerun(self, array: RfidTagArray) -> None:
+        """Push tag list straight to the Rerun gRPC server (same recording as the viewer)."""
+        try:
+            import rerun as rr
+            from dimos.core.global_config import global_config
+            from dimos.visualization.rerun.constants import RERUN_GRPC_PORT
+
+            if not self._rerun_connected:
+                host = global_config.rerun_host or global_config.listen_host or "127.0.0.1"
+                url = f"rerun+http://{host}:{RERUN_GRPC_PORT}/proxy"
+                rr.connect_grpc(url)
+                self._rerun_connected = True
+
+            rr.log(RFID_RERUN_ENTITY, array.to_rerun())
+        except Exception as exc:
+            # Bridge may not be up yet on first poll; retry next tick.
+            self._rerun_connected = False
+            logger.debug("Rerun RFID panel update failed (will retry): %s", exc)
+
     def _publish_tags(self, array: RfidTagArray, *, force: bool = False) -> None:
         self._latest = array
         if not force and not self._should_publish(array):
@@ -213,6 +238,7 @@ class RfidModule(Module):
         if force:
             self._last_publish_key = self._publish_key(array)
         self.rfid_tags.publish(array)
+        self._log_to_rerun(array)
         logger.info(
             "RFID → /rfid/tags (%d tags, %d in range)",
             array.total_count,

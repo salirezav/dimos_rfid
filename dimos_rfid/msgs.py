@@ -115,9 +115,10 @@ class RfidTagArray:
 
         return "\n".join(lines)
 
-    def to_rerun(self) -> rr.TextLog:
-        """Logged on LCM topic /rfid/tags → entity world/rfid/tags (matches RFID panel)."""
-        return rr.TextLog(
-            self.to_markdown_panel(),
-            level=rr.TextLogLevel.INFO,
-        )
+    def to_rerun(self) -> rr.TextDocument | rr.TextLog:
+        """For RerunBridge LCM path (also logged directly from RfidModule)."""
+        text = self.to_markdown_panel()
+        try:
+            return rr.TextDocument(text, media_type=rr.MediaType.MARKDOWN)
+        except (AttributeError, TypeError):
+            return rr.TextLog(text, level=rr.TextLogLevel.INFO)
