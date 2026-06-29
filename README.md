@@ -15,6 +15,8 @@ The intended deployment is a **two-machine setup**: the RFID HTTP server runs **
 ```
 Dimos/
 ├── README.md                    ← you are here
+├── pyproject.toml               ← project metadata and dependencies (uv)
+├── uv.lock                      ← locked dependency versions
 ├── rfid scanner python/         ← runs on the robot (reader hardware access)
 │   ├── rfid_scanner_server.py   ← Flask HTTP API + web UI (port 8765)
 │   ├── rfid_service.py          ← Python RfidScanner library
@@ -69,12 +71,38 @@ Dimos/
 
 | Component | Where | Notes |
 |-----------|--------|-------|
-| Linux (Ubuntu 22.04+ recommended) | Laptop | DimOS is Linux-first |
-| Python 3.10+ | Laptop | 3.12 tested |
-| DimOS with Unitree extras | Laptop | `dimos[base,unitree]` |
+| Linux (Ubuntu 22.04+ recommended) | Laptop | DimOS is Linux-first (x86_64) |
+| Python 3.10+ | Laptop | 3.12 recommended; managed by `uv` |
+| [uv](https://docs.astral.sh/uv/) | Laptop | Creates the venv and installs dependencies |
 | Go2 on same network | Robot + laptop | Phone hotspot or lab Wi‑Fi |
 | Vulcan reader powered & cabled | Robot | `ping 192.168.123.2` from the dog |
-| `flask`, `requests` on robot | Robot | Usually present on Unitree images |
+| `flask`, `requests` on robot | Robot | Use `uv sync --extra robot` or system Python |
+
+---
+
+## Quick start (uv)
+
+```bash
+git clone https://github.com/salirezav/dimos_rfid.git
+cd dimos_rfid
+
+# Create .venv, install DimOS + dimos-rfid (locked versions)
+uv sync --extra unitree
+
+# Register RFID blueprints with the dimos CLI
+chmod +x dimos_rfid/integrate_with_dimos.sh
+./dimos_rfid/integrate_with_dimos.sh
+```
+
+Verify DimOS sees the stack:
+
+```bash
+uv run dimos list | grep -i rfid
+```
+
+Run commands through `uv run` (no manual `source .venv/bin/activate` required), or activate `.venv` if you prefer.
+
+Keep the project on a **native Linux filesystem** (e.g. `~/projects/`), not on a network mount or cross-OS bind mount. DimOS does heavy I/O during first startup (model weights, LFS data); a slow filesystem causes multi-minute hangs with little console output.
 
 ---
 
@@ -82,61 +110,45 @@ Dimos/
 
 These are the steps to go from a fresh Linux machine to a running `dimos run unitree-go2-rfid` stack.
 
-### 1. Install DimOS
-
-Create a virtual environment and install DimOS with Unitree support:
+### 1. Install uv and clone the repository
 
 ```bash
-mkdir -p ~/projects/Dimos
-cd ~/projects/Dimos
+curl -LsSf https://astral.sh/uv/install.sh | sh   # or: pip install uv
 
-python3 -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/salirezav/dimos_rfid.git
+cd dimos_rfid
+```
 
-# pip or uv both work; uv is faster
-uv pip install 'dimos[base,unitree]'
-# or: pip install 'dimos[base,unitree]'
+### 2. Create the environment and install dependencies
+
+```bash
+uv sync --extra unitree
+```
+
+This reads `pyproject.toml` and `uv.lock`, creates `.venv`, installs `dimos[base,unitree]`, and installs this repo's `dimos_rfid` package in editable mode.
+
+Optional extras:
+
+| Extra | Purpose | Command |
+|-------|---------|---------|
+| `unitree` | Go2 blueprints (`dimos[unitree]`) | `uv sync --extra unitree` |
+| `robot` | Flask server deps for the onboard RFID HTTP API | `uv sync --extra robot` |
+
+```bash
+uv sync --all-extras    # unitree + robot
 ```
 
 Verify:
 
 ```bash
-dimos list | grep unitree-go2
+uv run dimos list | grep unitree-go2
 ```
 
-Keep the project and virtualenv on a **native Linux filesystem** (e.g. `~/projects/`), not on a network mount or cross-OS bind mount. DimOS does heavy I/O during first startup (model weights, LFS data); a slow filesystem causes multi-minute hangs with little console output.
-
-### 2. Copy this repository
-
-Clone or copy the two project directories into your workspace:
-
-```bash
-# Example: if you received a zip or git repo
-cd ~/projects/Dimos
-# ensure these exist:
-#   dimos_rfid/
-#   rfid scanner python/
-```
-
-You do **not** need to copy a pre-built `.venv` from another machine. Always recreate the venv locally.
-
-### 3. Install the RFID DimOS package
-
-```bash
-cd ~/projects/Dimos
-source .venv/bin/activate
-
-uv pip install -e "./dimos_rfid[unitree]"
-```
-
-This installs the `dimos-rfid` package in editable mode so you can edit `dimos_rfid/` and see changes immediately.
-
-### 4. Integrate with the `dimos` CLI
+### 3. Integrate with the `dimos` CLI
 
 DimOS discovers runnable stacks via blueprint files inside the `dimos` Python package. The integration script vendors the RFID module into `dimos/hardware/sensors/rfid/` and regenerates the blueprint registry so you can use `dimos run`:
 
 ```bash
-source .venv/bin/activate
 chmod +x dimos_rfid/integrate_with_dimos.sh
 ./dimos_rfid/integrate_with_dimos.sh
 ```
@@ -149,7 +161,7 @@ After success, `dimos list` should include:
 
 Re-run `./dimos_rfid/integrate_with_dimos.sh` whenever you **upgrade the `dimos` package**, because pip upgrades overwrite files under `site-packages/`.
 
-### 5. Deploy the RFID HTTP server on the dog
+### 4. Deploy the RFID HTTP server on the dog
 
 SSH into the Go2 and start the scanner server:
 
@@ -173,7 +185,7 @@ curl http://<dog-wifi-ip>:8765/api/v1/health
 
 See [`rfid scanner python/RFID_SCANNER.md`](rfid%20scanner%20python/RFID_SCANNER.md) for hardware notes, ports, and troubleshooting.
 
-### 6. Configure environment variables
+### 5. Configure environment variables
 
 On the laptop, before starting DimOS:
 
@@ -189,39 +201,37 @@ export RFID_CONNECTION_MODE=http        # default; see dimos_rfid/README.md for 
 export RFID_SCANNER_PYTHON_DIR=/path/to/rfid scanner python  # only for direct mode
 ```
 
-### 7. Run DimOS with RFID
+### 6. Run DimOS with RFID
 
 **Full Go2 spatial stack + RFID** (SLAM, map, camera, navigation, RFID tags in Rerun):
 
 ```bash
-dimos run unitree-go2-rfid
+uv run dimos run unitree-go2-rfid
 ```
 
 **RFID + viewer only** (no robot connection):
 
 ```bash
 export RFID_API_BASE=http://<dog-wifi-ip>:8765/api/v1
-dimos run rfid-demo
+uv run dimos run rfid-demo
 ```
 
 **Without registering blueprints** (alternative entry point):
 
 ```bash
-python -m dimos_rfid go2
+uv run python -m dimos_rfid go2
 ```
 
-### 8. Verify RFID data
+### 7. Verify RFID data
 
 In a second terminal (while DimOS is running):
 
 ```bash
-source .venv/bin/activate
-
 # LCM stream
-dimos topic echo /rfid/tags
+uv run dimos topic echo /rfid/tags
 
 # If using an agentic blueprint with MCP server
-dimos mcp call get_active_rfid_tags
+uv run dimos mcp call get_active_rfid_tags
 ```
 
 ---
@@ -240,7 +250,7 @@ dimos mcp call get_active_rfid_tags
 Example with browser-based viewer (useful on remote/headless machines):
 
 ```bash
-dimos --viewer rerun-web run unitree-go2-rfid
+uv run dimos --viewer rerun-web run unitree-go2-rfid
 ```
 
 **First startup is slow.** DimOS downloads large assets (LFS objects, YOLO weights) on the first run. The Rerun window appears only after `RerunBridgeModule` deploys — often several minutes after "Starting DimOS". Wait for log lines like:
@@ -278,7 +288,7 @@ Details: [`dimos_rfid/README.md`](dimos_rfid/README.md).
 
 ### `ModuleNotFoundError: No module named 'dimos_rfid'`
 
-Run integration again with the venv activated:
+Run integration again:
 
 ```bash
 ./dimos_rfid/integrate_with_dimos.sh
@@ -291,8 +301,8 @@ The script vendors code into the `dimos` package so `dimos run` does not depend 
 Usually first-run asset download or slow disk I/O. Check:
 
 ```bash
-dimos log -f          # follow logs
-dimos status          # is it still running?
+uv run dimos log -f          # follow logs
+uv run dimos status          # is it still running?
 ```
 
 Ensure the project lives on a fast local disk.
@@ -303,14 +313,14 @@ Startup may still be loading modules. Try:
 
 - Wait for `RerunBridgeModule` in logs
 - Open `http://localhost:7779/command-center` in a browser
-- Use `dimos --viewer rerun-web run unitree-go2-rfid`
+- Use `uv run dimos --viewer rerun-web run unitree-go2-rfid`
 
 ### RFID tags not appearing
 
 1. Confirm `rfid_scanner_server.py` is running on the dog
 2. `curl http://<dog-ip>:8765/api/v1/health`
 3. Check `RFID_API_BASE` points to the dog's **Wi‑Fi IP**, not `192.168.123.2`
-4. `dimos topic echo /rfid/tags`
+4. `uv run dimos topic echo /rfid/tags`
 
 ### WebRTC errors on port 8081 then recovery
 
@@ -332,11 +342,12 @@ If you need spatial memory without SAM2, compose a custom blueprint with `unitre
 
 | Task | Command |
 |------|---------|
+| Install / update deps | `uv sync --extra unitree` |
 | Edit RFID module | Change files in `dimos_rfid/`, re-run integration |
 | Re-register blueprints | `./dimos_rfid/integrate_with_dimos.sh` |
-| Run without `dimos run` | `python -m dimos_rfid go2` |
-| Stop DimOS | `Ctrl+C` or `dimos stop` |
-| View logs | `dimos log -f` |
+| Run without `dimos run` | `uv run python -m dimos_rfid go2` |
+| Stop DimOS | `Ctrl+C` or `uv run dimos stop` |
+| View logs | `uv run dimos log -f` |
 
 ---
 

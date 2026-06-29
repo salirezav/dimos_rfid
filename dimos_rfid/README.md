@@ -108,26 +108,31 @@ self.rfid_tags.publish(array)   # → /rfid/tags#dimos_rfid.msgs.RfidTagArray
 | `go2_agentic_blueprints.py` | `unitree_go2_rfid_agentic` — adds MCP agent (separate file to avoid import-time agent deps) |
 | `__main__.py` | `python -m dimos_rfid {demo,go2,go2-agentic}` runner |
 | `integrate_with_dimos.sh` | Vendors into `dimos` package + regenerates blueprint registry |
-| `pyproject.toml` | Package metadata (`dimos-rfid`) |
+
+Project metadata and dependencies live in the repository root: `pyproject.toml` and `uv.lock`.
 
 ---
 
 ## Prerequisites
 
-1. **DimOS** with Unitree extras on a Linux machine:
+1. **Linux x86_64** with **[uv](https://docs.astral.sh/uv/)** installed.
+
+2. **DimOS + this package** via uv from the repository root:
 
    ```bash
-   uv pip install 'dimos[base,unitree]'
+   git clone https://github.com/salirezav/dimos_rfid.git
+   cd dimos_rfid
+   uv sync --extra unitree
    ```
 
-2. **`rfid_scanner_server.py` running on the Go2** (recommended):
+3. **`rfid_scanner_server.py` running on the Go2** (recommended):
 
    ```bash
    cd "rfid scanner python"
    python3 rfid_scanner_server.py
    ```
 
-3. **This package** installed into the same virtualenv as DimOS (see below).
+   On the robot you can also use `uv sync --extra robot` from the repo root if uv is available there.
 
 ---
 
@@ -136,13 +141,13 @@ self.rfid_tags.publish(array)   # → /rfid/tags#dimos_rfid.msgs.RfidTagArray
 From the repository root:
 
 ```bash
-cd /path/to/Dimos
-source .venv/bin/activate
-
-uv pip install -e "./dimos_rfid[unitree]"
+cd /path/to/dimos_rfid
+uv sync --extra unitree
 ```
 
-The `[unitree]` extra ensures `dimos[unitree]` is available for Go2 blueprints.
+This creates `.venv`, installs locked versions of `dimos[base,unitree]`, and installs the `dimos_rfid` package in editable mode.
+
+Use `uv run` to invoke tools without activating the venv, e.g. `uv run dimos list`.
 
 ---
 
@@ -151,13 +156,12 @@ The `[unitree]` extra ensures `dimos[unitree]` is available for Go2 blueprints.
 ### Recommended: `integrate_with_dimos.sh`
 
 ```bash
-source .venv/bin/activate
 ./dimos_rfid/integrate_with_dimos.sh
 ```
 
 The script:
 
-1. Installs `dimos-rfid` editable from `dimos_rfid/`
+1. Runs `uv sync --extra unitree --frozen` to ensure the environment matches `uv.lock`
 2. Copies module files into `{dimos}/hardware/sensors/rfid/` inside your environment's `site-packages`
 3. Rewrites imports from `dimos_rfid.*` → `dimos.hardware.sensors.rfid.*` in the vendored copies (so `dimos run` does not depend on a separate import path)
 4. Regenerates `dimos/robot/all_blueprints.py` by scanning for `autoconnect(...)` assignments
@@ -182,7 +186,7 @@ DimOS CLI naming rule: `snake_case` blueprint variables become `kebab-case` comm
 ```bash
 export ROBOT_IP=<go2-ip>
 export RFID_API_BASE=http://<go2-ip>:8765/api/v1
-python -m dimos_rfid go2
+uv run python -m dimos_rfid go2
 ```
 
 Calls `ModuleCoordinator.build(blueprint).loop()` — identical runtime to `dimos run`, without touching `all_blueprints.py`.
@@ -236,27 +240,27 @@ Use the dog's **Wi‑Fi / hotspot IP**, not the reader's Ethernet IP (`192.168.1
 
 ```bash
 # Full Go2 + RFID (recommended)
-dimos run unitree-go2-rfid
+uv run dimos run unitree-go2-rfid
 
 # RFID viewer only
-dimos run rfid-demo
+uv run dimos run rfid-demo
 
 # With web-based visualization
-dimos --viewer rerun-web run unitree-go2-rfid
+uv run dimos --viewer rerun-web run unitree-go2-rfid
 
 # Without dimos CLI registration
-python -m dimos_rfid go2
+uv run python -m dimos_rfid go2
 ```
 
 ### Verify
 
 ```bash
 # While DimOS is running
-dimos topic echo /rfid/tags
+uv run dimos topic echo /rfid/tags
 
 # Agentic blueprint (if MCP server is up)
-dimos mcp call get_active_rfid_tags
-dimos agent-send "what RFID tags do you see?"
+uv run dimos mcp call get_active_rfid_tags
+uv run dimos agent-send "what RFID tags do you see?"
 ```
 
 ---
@@ -424,7 +428,7 @@ Future work: `Points3D` / `Arrows3D` at estimated world positions once localizat
 ### Debug without Rerun
 
 ```bash
-dimos topic echo /rfid/tags
+uv run dimos topic echo /rfid/tags
 ```
 
 ### RFID-only demo

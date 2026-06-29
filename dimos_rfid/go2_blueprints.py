@@ -1,6 +1,6 @@
 # Copyright 2026. RFID DimOS integration — Go2 + RFID blueprints.
 #
-# Requires: pip install 'dimos[base,unitree]'
+# Requires: uv sync --extra unitree  (dimos[base,unitree])
 
 from __future__ import annotations
 

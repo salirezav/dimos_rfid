@@ -8,15 +8,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 RFID_PKG="dimos.hardware.sensors.rfid"
 
-if [[ -z "${VIRTUAL_ENV:-}" ]]; then
-    echo "Activate your DimOS venv first, e.g.: source .venv/bin/activate" >&2
+if ! command -v uv &>/dev/null; then
+    echo "Install uv first: https://docs.astral.sh/uv/" >&2
     exit 1
 fi
 
-echo "Installing dimos-rfid (editable) from ${SCRIPT_DIR}..."
-uv pip install -e "${SCRIPT_DIR}[unitree]"
+cd "${PROJECT_ROOT}"
 
-DIMOS_PKG="$(python -c "import dimos, os; print(os.path.dirname(dimos.__file__))")"
+echo "Syncing project environment with uv..."
+uv sync --extra unitree --frozen
+
+DIMOS_PKG="$(uv run python -c "import dimos, os; print(os.path.dirname(dimos.__file__))")"
 RFID_DIR="${DIMOS_PKG}/hardware/sensors/rfid"
 
 echo "Vendoring RFID module into ${RFID_DIR}..."
@@ -38,7 +40,7 @@ sed -i "s/from dimos_rfid\.go2_blueprints/from ${RFID_PKG}.go2_blueprints/g" \
     "${RFID_DIR}/go2_agentic_blueprints.py"
 
 echo "Regenerating dimos blueprint registry..."
-python - <<'PY'
+uv run python - <<'PY'
 from dimos.constants import DIMOS_PROJECT_ROOT
 from dimos.robot.test_all_blueprints_generation import (
     _generate_all_blueprints_content,
@@ -54,7 +56,7 @@ PY
 
 echo ""
 echo "Verifying imports..."
-python - <<PY
+uv run python - <<PY
 from dimos.robot.get_all_blueprints import get_blueprint_by_name
 for name in ("rfid-demo", "unitree-go2-rfid"):
     get_blueprint_by_name(name)
@@ -63,10 +65,10 @@ PY
 
 echo ""
 echo "Registered RFID blueprints:"
-dimos list | grep -i rfid || true
+uv run dimos list | grep -i rfid || true
 
 echo ""
 echo "Done. Example:"
 echo "  export ROBOT_IP=<go2-wifi-ip>"
 echo "  export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1"
-echo "  dimos run unitree-go2-rfid"
+echo "  uv run dimos run unitree-go2-rfid"

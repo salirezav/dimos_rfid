@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "dimos-rfid"
 version = "0.1.0"
 description = "Vulcan RFID scanner module for DimOS"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "dimos[base]",
@@ -14,7 +15,17 @@ dependencies = [
 
 [project.optional-dependencies]
 unitree = ["dimos[unitree]"]
+robot = [
+    "flask>=3.0",
+    "requests>=2.28",
+]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["dimos_rfid*"]
+include = ["dimos_rfid"]
+
+[tool.uv]
+default-groups = []
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+]
