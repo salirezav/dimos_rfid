@@ -47,7 +47,7 @@ class RfidModuleConfig(ModuleConfig):
     reader_password: str = Field(
         default_factory=lambda: os.environ.get("VULCAN_READER_PASS", "admin")
     )
-    poll_hz: float = Field(default=2.0, gt=0)
+    poll_hz: float = Field(default=1.0, gt=0)
     stale_seconds: float = Field(default=5.0, gt=0)
     antenna_frame_id: str = "rfid_antenna"
     antenna_offset_z: float = Field(
@@ -70,6 +70,7 @@ class RfidModule(Module):
     _scanner: Any = None
     _latest: RfidTagArray | None = None
     _connection_mode: Literal["http", "direct"] = "http"
+    _last_publish_key: tuple[tuple[str, Any, bool], ...] | None = None
 
     @rpc
     def start(self) -> None:
@@ -126,7 +127,7 @@ class RfidModule(Module):
             tag, frame_id=self.config.antenna_frame_id
         )
         self._latest = array
-        self.rfid_tags.publish(array)
+        self._publish_tags(array)
 
     def _publish_direct_snapshot(self) -> None:
         if self._scanner is None:
@@ -135,8 +136,7 @@ class RfidModule(Module):
         array = RfidTagArray.from_api_payload(
             payload, frame_id=self.config.antenna_frame_id
         )
-        self._latest = array
-        self.rfid_tags.publish(array)
+        self._publish_tags(array)
 
     def _start_http_poll(self) -> None:
         base = self.config.api_base.rstrip("/")
@@ -167,7 +167,7 @@ class RfidModule(Module):
     def _poll_http(self) -> None:
         base = self.config.api_base.rstrip("/")
         try:
-            response = requests.get(f"{base}/tags/active", timeout=3)
+            response = requests.get(f"{base}/tags", timeout=1.5)
             response.raise_for_status()
             payload = response.json()
             if not payload.get("ok", True) and "tags" not in payload:
@@ -176,15 +176,29 @@ class RfidModule(Module):
             array = RfidTagArray.from_api_payload(
                 payload, frame_id=self.config.antenna_frame_id
             )
-            self._latest = array
-            self.rfid_tags.publish(array)
-            if array.active_count:
-                logger.info(
-                    "RFID published %d active tag(s) on /rfid/tags",
-                    array.active_count,
-                )
+            self._publish_tags(array)
         except requests.RequestException as exc:
             logger.warning("RFID HTTP poll failed (%s): %s", base, exc)
+
+    @staticmethod
+    def _publish_key(array: RfidTagArray) -> tuple[tuple[str, Any, bool], ...]:
+        return tuple(
+            (t.epc, t.rssi_dbm, t.in_range)
+            for t in sorted(array.tags, key=lambda x: x.epc)
+        )
+
+    def _should_publish(self, array: RfidTagArray) -> bool:
+        key = self._publish_key(array)
+        if key == self._last_publish_key:
+            return False
+        self._last_publish_key = key
+        return True
+
+    def _publish_tags(self, array: RfidTagArray) -> None:
+        self._latest = array
+        if not self._should_publish(array):
+            return
+        self.rfid_tags.publish(array)
 
     @skill
     def get_active_rfid_tags(self) -> str:

@@ -65,22 +65,52 @@ class RfidTagArray:
     def active_tags(self) -> list[RfidTag]:
         return [t for t in self.tags if t.in_range]
 
-    def to_rerun(self) -> list[tuple[str, rr.Archetype]]:
-        """Status line in 3D view (camera dots come from RfidOverlayModule)."""
-        active = self.active_tags()
-        if not active:
-            text = f"RFID: {self.total_count} discovered, none in range"
-        else:
-            parts = []
-            for tag in active[:8]:
-                label = tag.name or f"…{tag.epc[-8:].upper()}"
-                rssi = f"{tag.rssi_dbm} dBm" if tag.rssi_dbm is not None else "?"
-                parts.append(f"{label} ({rssi})")
-            suffix = f" +{len(active) - 8} more" if len(active) > 8 else ""
-            text = f"RFID in range ({len(active)}): " + ", ".join(parts) + suffix
-        return [
-            (
-                "world/rfid/status",
-                rr.TextLog(text, level=rr.TextLogLevel.INFO),
-            )
+    def to_markdown_panel(self) -> str:
+        """Human-readable tag list for the RFID side panel."""
+        in_range = sorted(
+            self.active_tags(),
+            key=lambda t: t.rssi_dbm if t.rssi_dbm is not None else -999,
+            reverse=True,
+        )
+        out_of_range = [t for t in self.tags if not t.in_range]
+
+        lines = [
+            "# RFID scanner",
+            "",
+            f"**In range:** {len(in_range)}  ·  **Discovered:** {self.total_count}",
+            "",
         ]
+
+        if in_range:
+            lines.append("## In range")
+            lines.append("")
+            lines.append("| Tag | RSSI | EPC |")
+            lines.append("|-----|------|-----|")
+            for tag in in_range:
+                name = tag.name or f"…{tag.epc[-8:].upper()}"
+                rssi = f"{tag.rssi_dbm} dBm" if tag.rssi_dbm is not None else "—"
+                lines.append(f"| {name} | {rssi} | `{tag.epc}` |")
+            lines.append("")
+        else:
+            lines.append("_No tags in range right now._")
+            lines.append("")
+
+        if out_of_range:
+            lines.append("## Out of range (seen earlier)")
+            lines.append("")
+            for tag in out_of_range[:10]:
+                name = tag.name or f"…{tag.epc[-8:].upper()}"
+                lines.append(f"- {name} — `{tag.epc}`")
+            if len(out_of_range) > 10:
+                lines.append(f"- _…and {len(out_of_range) - 10} more_")
+
+        return "\n".join(lines)
+
+    def to_rerun(self) -> list[tuple[str, rr.Archetype]]:
+        """RFID tag list panel (right column in Rerun blueprint)."""
+        text = self.to_markdown_panel()
+        try:
+            doc = rr.TextDocument(text, media_type=rr.MediaType.MARKDOWN)
+        except (AttributeError, TypeError):
+            doc = rr.TextLog(text, level=rr.TextLogLevel.INFO)
+        return [("world/rfid/panel", doc)]

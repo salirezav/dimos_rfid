@@ -9,14 +9,14 @@ import os
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.transport import pLCMTransport
 from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
+from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 from dimos_rfid.msgs import RfidTagArray
 from dimos_rfid.rfid_module import RfidModule
-from dimos_rfid.rfid_overlay_module import RfidCameraOverlay, RfidOverlayModule
+from dimos_rfid.rfid_rerun import go2_rfid_rerun_config
 
 _RFID_TRANSPORTS = {
     ("rfid_tags", RfidTagArray): pLCMTransport("/rfid/tags"),
-    ("rfid_overlay", RfidCameraOverlay): pLCMTransport("/rfid/camera_overlay"),
 }
 
 
@@ -27,13 +27,15 @@ def _rfid_module_blueprint():
             "RFID_API_BASE",
             "http://192.168.123.18:8765/api/v1",
         ),
+        poll_hz=float(os.environ.get("RFID_POLL_HZ", "1")),
     )
 
 
 unitree_go2_rfid = autoconnect(
     unitree_go2,
     _rfid_module_blueprint(),
-    RfidOverlayModule.blueprint(),
+    # Override Go2 Rerun layout: add RFID tag list panel (later module wins).
+    RerunBridgeModule.blueprint(**go2_rfid_rerun_config()),
 ).transports(_RFID_TRANSPORTS)
 
 __all__ = ["unitree_go2_rfid", "_RFID_TRANSPORTS", "_rfid_module_blueprint"]
