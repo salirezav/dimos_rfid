@@ -70,7 +70,7 @@ class RfidModule(Module):
     _scanner: Any = None
     _latest: RfidTagArray | None = None
     _connection_mode: Literal["http", "direct"] = "http"
-    _last_publish_key: tuple[tuple[str, Any, bool], ...] | None = None
+    _last_publish_key: tuple[Any, ...] | None = None
 
     @rpc
     def start(self) -> None:
@@ -84,6 +84,10 @@ class RfidModule(Module):
         if self._connection_mode == "direct":
             self._start_direct()
         else:
+            self._publish_tags(
+                RfidTagArray(connection_status=f"Polling {self.config.api_base} …"),
+                force=True,
+            )
             self._start_http_poll()
 
     def _publish_antenna_tf(self) -> None:
@@ -176,16 +180,24 @@ class RfidModule(Module):
             array = RfidTagArray.from_api_payload(
                 payload, frame_id=self.config.antenna_frame_id
             )
+            array.connection_status = "Connected"
             self._publish_tags(array)
         except requests.RequestException as exc:
             logger.warning("RFID HTTP poll failed (%s): %s", base, exc)
+            self._publish_tags(
+                RfidTagArray(
+                    connection_status=f"API unreachable: {exc}",
+                ),
+                force=True,
+            )
 
     @staticmethod
-    def _publish_key(array: RfidTagArray) -> tuple[tuple[str, Any, bool], ...]:
-        return tuple(
+    def _publish_key(array: RfidTagArray) -> tuple[Any, ...]:
+        tag_part = tuple(
             (t.epc, t.rssi_dbm, t.in_range)
             for t in sorted(array.tags, key=lambda x: x.epc)
         )
+        return (array.connection_status, tag_part)
 
     def _should_publish(self, array: RfidTagArray) -> bool:
         key = self._publish_key(array)
@@ -194,11 +206,18 @@ class RfidModule(Module):
         self._last_publish_key = key
         return True
 
-    def _publish_tags(self, array: RfidTagArray) -> None:
+    def _publish_tags(self, array: RfidTagArray, *, force: bool = False) -> None:
         self._latest = array
-        if not self._should_publish(array):
+        if not force and not self._should_publish(array):
             return
+        if force:
+            self._last_publish_key = self._publish_key(array)
         self.rfid_tags.publish(array)
+        logger.info(
+            "RFID → /rfid/tags (%d tags, %d in range)",
+            array.total_count,
+            array.active_count,
+        )
 
     @skill
     def get_active_rfid_tags(self) -> str:

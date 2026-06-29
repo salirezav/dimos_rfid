@@ -45,6 +45,7 @@ class RfidTagArray:
     frame_id: str = "rfid_antenna"
     active_count: int = 0
     total_count: int = 0
+    connection_status: str = ""
 
     @classmethod
     def from_api_payload(cls, payload: dict[str, Any], *, frame_id: str = "rfid_antenna") -> RfidTagArray:
@@ -77,9 +78,17 @@ class RfidTagArray:
         lines = [
             "# RFID scanner",
             "",
-            f"**In range:** {len(in_range)}  ·  **Discovered:** {self.total_count}",
-            "",
         ]
+        if self.connection_status:
+            lines.append(f"**Status:** {self.connection_status}")
+            lines.append("")
+
+        lines.extend(
+            [
+                f"**In range:** {len(in_range)}  ·  **Discovered:** {self.total_count}",
+                "",
+            ]
+        )
 
         if in_range:
             lines.append("## In range")
@@ -106,11 +115,9 @@ class RfidTagArray:
 
         return "\n".join(lines)
 
-    def to_rerun(self) -> list[tuple[str, rr.Archetype]]:
-        """RFID tag list panel (right column in Rerun blueprint)."""
-        text = self.to_markdown_panel()
-        try:
-            doc = rr.TextDocument(text, media_type=rr.MediaType.MARKDOWN)
-        except (AttributeError, TypeError):
-            doc = rr.TextLog(text, level=rr.TextLogLevel.INFO)
-        return [("world/rfid/panel", doc)]
+    def to_rerun(self) -> rr.TextLog:
+        """Logged on LCM topic /rfid/tags → entity world/rfid/tags (matches RFID panel)."""
+        return rr.TextLog(
+            self.to_markdown_panel(),
+            level=rr.TextLogLevel.INFO,
+        )
