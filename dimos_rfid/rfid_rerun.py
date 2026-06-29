@@ -6,6 +6,14 @@ from typing import Any
 
 # Must match LCM topic /rfid/tags → Rerun entity prefix world + /rfid/tags
 RFID_RERUN_ENTITY = "world/rfid/tags"
+RFID_EMPTY_PANEL = """# RFID scanner
+
+**Status:** Waiting for RFID data
+
+**In range:** 0  -  **Discovered:** 0
+
+_No tag updates have reached the viewer yet._
+"""
 
 
 def go2_rfid_rerun_blueprint() -> Any:
@@ -53,6 +61,13 @@ def _rfid_visual_override(msg: Any) -> Any:
     return None
 
 
+def _rfid_static_panel(rr: Any) -> Any:
+    try:
+        return rr.TextDocument(RFID_EMPTY_PANEL, media_type=rr.MediaType.MARKDOWN)
+    except (AttributeError, TypeError):
+        return rr.TextLog(RFID_EMPTY_PANEL, level=rr.TextLogLevel.INFO)
+
+
 def go2_rfid_rerun_config() -> dict[str, Any]:
     """Merge Go2 Rerun settings with RFID panel layout."""
     from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
@@ -68,7 +83,9 @@ def go2_rfid_rerun_config() -> dict[str, Any]:
     max_hz[RFID_RERUN_ENTITY] = 1.0
     cfg["max_hz"] = max_hz
 
-    # No static placeholder — RfidModule logs live data directly to Rerun gRPC.
+    static = dict(cfg.get("static", {}))
+    static[RFID_RERUN_ENTITY] = _rfid_static_panel
+    cfg["static"] = static
 
     if "pubsubs" not in cfg:
         from dimos.protocol.pubsub.impl.lcmpubsub import LCM
