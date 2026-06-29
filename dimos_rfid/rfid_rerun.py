@@ -46,6 +46,14 @@ def _rfid_visual_override(msg: Any) -> Any:
     return None
 
 
+def _rfid_static_placeholder(rr: Any) -> Any:
+    """Module-level fn (not lambda) — required for DimOS forkserver pickling."""
+    return rr.TextLog(
+        "Waiting for RFID data from /rfid/tags …",
+        level=rr.TextLogLevel.WARN,
+    )
+
+
 def go2_rfid_rerun_config() -> dict[str, Any]:
     """Merge Go2 Rerun settings with RFID panel + throttle RFID UI updates."""
     from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
@@ -62,10 +70,7 @@ def go2_rfid_rerun_config() -> dict[str, Any]:
     cfg["max_hz"] = max_hz
 
     static = dict(cfg.get("static", {}))
-    static[RFID_RERUN_ENTITY] = lambda rr: rr.TextLog(
-        "Waiting for RFID data from /rfid/tags …",
-        level=rr.TextLogLevel.WARN,
-    )
+    static[RFID_RERUN_ENTITY] = _rfid_static_placeholder
     cfg["static"] = static
 
     if "pubsubs" not in cfg:
