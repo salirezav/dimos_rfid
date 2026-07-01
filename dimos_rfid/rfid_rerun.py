@@ -4,16 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-# Must match LCM topic /rfid/tags → Rerun entity prefix world + /rfid/tags
-RFID_RERUN_ENTITY = "world/rfid/tags"
-RFID_EMPTY_PANEL = """# RFID scanner
-
-**Status:** Waiting for RFID data
-
-**In range:** 0  -  **Discovered:** 0
-
-_No tag updates have reached the viewer yet._
-"""
+from dimos_rfid.bridge import RFID_RERUN_ENTITY
 
 
 def go2_rfid_rerun_blueprint() -> Any:
@@ -25,11 +16,13 @@ def go2_rfid_rerun_blueprint() -> Any:
     if hasattr(rrb, "TextDocumentView"):
         rfid_view = rrb.TextDocumentView(
             origin=RFID_RERUN_ENTITY,
+            contents=RFID_RERUN_ENTITY,
             name="RFID",
         )
     else:
         rfid_view = rrb.TextLogView(
             origin=RFID_RERUN_ENTITY,
+            contents=RFID_RERUN_ENTITY,
             name="RFID",
         )
 
@@ -62,11 +55,13 @@ def rfid_only_rerun_blueprint() -> Any:
     if hasattr(rrb, "TextDocumentView"):
         rfid_view = rrb.TextDocumentView(
             origin=RFID_RERUN_ENTITY,
+            contents=RFID_RERUN_ENTITY,
             name="RFID",
         )
     else:
         rfid_view = rrb.TextLogView(
             origin=RFID_RERUN_ENTITY,
+            contents=RFID_RERUN_ENTITY,
             name="RFID",
         )
 
@@ -83,25 +78,14 @@ def _rfid_visual_override(msg: Any) -> Any:
     return None
 
 
-def _rfid_static_panel(rr: Any) -> Any:
-    try:
-        return rr.TextDocument(RFID_EMPTY_PANEL, media_type=rr.MediaType.MARKDOWN)
-    except (AttributeError, TypeError):
-        return rr.TextLog(RFID_EMPTY_PANEL, level=rr.TextLogLevel.INFO)
-
-
 def _add_rfid_panel_config(cfg: dict[str, Any]) -> dict[str, Any]:
     visual_override = dict(cfg.get("visual_override", {}))
     visual_override[RFID_RERUN_ENTITY] = _rfid_visual_override
     cfg["visual_override"] = visual_override
 
     max_hz = dict(cfg.get("max_hz", {}))
-    max_hz[RFID_RERUN_ENTITY] = 1.0
+    max_hz.pop(RFID_RERUN_ENTITY, None)
     cfg["max_hz"] = max_hz
-
-    static = dict(cfg.get("static", {}))
-    static[RFID_RERUN_ENTITY] = _rfid_static_panel
-    cfg["static"] = static
 
     return cfg
 

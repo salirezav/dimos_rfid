@@ -24,7 +24,7 @@ RFID_DIR="${DIMOS_PKG}/hardware/sensors/rfid"
 echo "Vendoring RFID module into ${RFID_DIR}..."
 mkdir -p "${RFID_DIR}"
 
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py; do
+for f in bridge.py demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py; do
     cp "${SCRIPT_DIR}/${f}" "${RFID_DIR}/${f}"
 done
 
