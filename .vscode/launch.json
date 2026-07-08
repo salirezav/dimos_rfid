@@ -41,6 +41,22 @@
             "justMyCode": false
         },
         {
+            // Opens the DimOS (Rerun) viewer and shows the live tag list in a
+            // text panel. Runs in-process (no forkserver worker), so the viewer
+            // spawns reliably under the debugger. The PATH entry lets the native
+            // "dimos-viewer" resolve even though F5 doesn't activate the venv.
+            "name": "RFID: DimOS UI (Rerun viewer)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/rfid_module/rfid_module.py",
+            "args": ["--ui"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "cwd": "${workspaceFolder}/rfid_module",
+            "justMyCode": false,
+            "env": { "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}" }
+        },
+        {
             // Runs via ModuleCoordinator, which deploys the module into a
             // forkserver child process. "subProcess": true lets debugpy attach
             // to that child (stepping in it can be unreliable on Python 3.12).
