@@ -5,6 +5,29 @@
     "version": "0.2.0",
     "configurations": [
         {
+            // WORKS EVEN WITH THE BROKEN `pet` RESOLVER. You start the script
+            // yourself with the venv's debugpy (see terminal command below),
+            // and Cursor just attaches over the socket. No interpreter
+            // resolution by the Python extension is involved.
+            //
+            //   Terminal (from the workspace root):
+            //   .venv/bin/python -m debugpy --listen 5678 --wait-for-client \
+            //       rfid_module/rfid_module.py
+            //
+            // Then run this "attach" config.
+            "name": "RFID: attach (debugpy, bypasses pet)",
+            "type": "debugpy",
+            "request": "attach",
+            "connect": { "host": "127.0.0.1", "port": 5678 },
+            "justMyCode": false,
+            "pathMappings": [
+                {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "${workspaceFolder}"
+                }
+            ]
+        },
+        {
             // RECOMMENDED for breakpoints: runs the module in THIS process, so
             // the async loop runs in a background thread the debugger can step
             // through (unlike the forked-worker path on Python 3.12).
