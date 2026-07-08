@@ -57,6 +57,23 @@
             "env": { "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}" }
         },
         {
+            // Full robot view: runs the real Go2 stack (camera + 3D lidar) and
+            // overrides its Rerun layout with camera | 3D | RFID. Needs the robot
+            // reachable (same as `dimos run unitree-go2`) and the "unitree" extra
+            // installed in the venv. The PATH entry resolves "dimos-viewer".
+            "name": "RFID + Go2: full DimOS UI (camera | 3D | RFID)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/rfid_module/rfid_module.py",
+            "args": ["--go2"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "cwd": "${workspaceFolder}/rfid_module",
+            "justMyCode": false,
+            "subProcess": true,
+            "env": { "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}" }
+        },
+        {
             // Runs via ModuleCoordinator, which deploys the module into a
             // forkserver child process. "subProcess": true lets debugpy attach
             // to that child (stepping in it can be unreliable on Python 3.12).
