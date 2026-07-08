@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 import rerun as rr
@@ -23,7 +22,6 @@ class RfidTag:
     in_range: bool = False
     last_seen: float = 0.0
     name: str = ""
-    phase: str = ""
 
     @classmethod
     def from_api_dict(cls, data: dict[str, Any]) -> RfidTag:
@@ -36,7 +34,6 @@ class RfidTag:
             in_range=bool(data.get("in_range", False)),
             last_seen=float(data.get("last_seen", 0.0)),
             name=str(data.get("name", "")),
-            phase=str(data.get("phase") or ""),
         )
 
 
@@ -74,28 +71,8 @@ class RfidTagArray:
         return tag.name or f"...{tag.epc[-8:].upper()}"
 
     @staticmethod
-    def _short_epc(tag: RfidTag) -> str:
-        return f"...{tag.epc[-8:].upper()}" if tag.epc else "N/A"
-
-    @staticmethod
     def _display_rssi(tag: RfidTag) -> str:
         return f"{tag.rssi_dbm} dBm" if tag.rssi_dbm is not None else "unknown RSSI"
-
-    @staticmethod
-    def _display_value(value: Any) -> str:
-        if value is None or value == "":
-            return "N/A"
-        return str(value)
-
-    @staticmethod
-    def _display_timestamp(ts: float) -> str:
-        if not ts:
-            return "N/A"
-        return datetime.fromtimestamp(ts).isoformat(timespec="seconds")
-
-    @staticmethod
-    def _markdown_cell(value: Any) -> str:
-        return str(value).replace("|", "\\|")
 
     def to_terminal_summary(self) -> str:
         """Single-line tag details for logs."""
@@ -128,6 +105,8 @@ class RfidTagArray:
             key=lambda t: t.rssi_dbm if t.rssi_dbm is not None else -999,
             reverse=True,
         )
+        out_of_range = [t for t in self.tags if not t.in_range]
+
         lines = [
             "# RFID scanner",
             "",
@@ -143,42 +122,33 @@ class RfidTagArray:
             ]
         )
 
-        if not in_range:
-            lines.append("**No active RFID tags**")
+        if in_range:
+            lines.append("## In range")
+            lines.append("")
+            lines.append("| Tag | RSSI | EPC |")
+            lines.append("|-----|------|-----|")
+            for tag in in_range:
+                name = self._display_name(tag)
+                rssi = self._display_rssi(tag)
+                lines.append(f"| {name} | {rssi} | `{tag.epc}` |")
+            lines.append("")
+        else:
+            lines.append("_No tags in range right now._")
             lines.append("")
 
-        lines.append("| timestamp | status | epc | short_epc | rssi_dbm | antenna | read_count | phase | robot_x | robot_y | robot_z | robot_yaw |")
-        lines.append("|---|---|---|---|---:|---:|---:|---|---:|---:|---:|---:|")
-
-        if self.tags:
-            for tag in sorted(
-                self.tags,
-                key=lambda t: (
-                    not t.in_range,
-                    -(t.rssi_dbm if t.rssi_dbm is not None else -999),
-                    t.epc,
-                ),
-            ):
-                status = "live" if tag.in_range else "seen"
-                lines.append(
-                    "| "
-                    f"{self._markdown_cell(self._display_timestamp(tag.last_seen))} | "
-                    f"{status} | "
-                    f"`{self._markdown_cell(tag.epc)}` | "
-                    f"{self._short_epc(tag)} | "
-                    f"{self._display_value(tag.rssi_dbm)} | "
-                    f"{self._display_value(tag.antenna)} | "
-                    f"{self._display_value(tag.read_count)} | "
-                    f"{self._markdown_cell(self._display_value(tag.phase))} | "
-                    "N/A | N/A | N/A | N/A |"
-                )
-        else:
-            lines.append("| N/A | seen | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A |")
+        if out_of_range:
+            lines.append("## Out of range (seen earlier)")
+            lines.append("")
+            for tag in out_of_range[:10]:
+                name = self._display_name(tag)
+                lines.append(f"- {name} - `{tag.epc}`")
+            if len(out_of_range) > 10:
+                lines.append(f"- _...and {len(out_of_range) - 10} more_")
 
         return "\n".join(lines)
 
     def to_rerun(self) -> rr.TextDocument | rr.TextLog:
-        """Convert this message for DimOS RerunBridgeModule."""
+        """For RerunBridge LCM path (also logged directly from RfidModule)."""
         text = self.to_markdown_panel()
         try:
             return rr.TextDocument(text, media_type=rr.MediaType.MARKDOWN)
