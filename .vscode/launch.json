@@ -1,0 +1,44 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            // RECOMMENDED for breakpoints: runs the module in THIS process, so
+            // the async loop runs in a background thread the debugger can step
+            // through (unlike the forked-worker path on Python 3.12).
+            "name": "RFID: in-process (recommended)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/rfid_module/rfid_module.py",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "cwd": "${workspaceFolder}/rfid_module",
+            "justMyCode": false
+        },
+        {
+            // Runs via ModuleCoordinator, which deploys the module into a
+            // forkserver child process. "subProcess": true lets debugpy attach
+            // to that child (stepping in it can be unreliable on Python 3.12).
+            "name": "RFID: via ModuleCoordinator (forked worker)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/rfid_module/rfid_module.py",
+            "args": ["--coordinator"],
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "cwd": "${workspaceFolder}/rfid_module",
+            "justMyCode": false,
+            "subProcess": true
+        },
+        {
+            "name": "Python Debugger: Current File",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "python": "${workspaceFolder}/.venv/bin/python"
+        }
+    ]
+}
