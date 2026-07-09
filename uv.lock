@@ -1050,7 +1050,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "debugpy", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
-    { name = "dimos", extra = ["base"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "dimos", extra = ["base", "unitree"], marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "pytest", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "requests", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
@@ -1067,7 +1067,7 @@ unitree = [
 [package.metadata]
 requires-dist = [
     { name = "debugpy", specifier = ">=1.8.21" },
-    { name = "dimos", extras = ["base"] },
+    { name = "dimos", extras = ["base", "unitree"] },
     { name = "dimos", extras = ["unitree"], marker = "extra == 'unitree'" },
     { name = "flask", marker = "extra == 'robot'", specifier = ">=3.0" },
     { name = "pytest", specifier = ">=9.1.1" },

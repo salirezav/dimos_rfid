@@ -21,9 +21,11 @@ reachable (same as `dimos run unitree-go2`).
 `--go2` also drops a spatial marker per tag. RFID gives only signal strength, so
 a tag can't be located from one reading; as the dog is driven around and re-sees
 the same EPC from different positions, the RSSI values are multilaterated into a
-world position (gray "estimating" dot -> green "located" dot). The marker also
-appears as a 2D overlay on the camera image, but only when it projects inside the
-frame — i.e. when the dog is looking toward where the tag was found.
+world position (gray "estimating" -> blue "refining" -> green "located"). Readings
+are only recorded while the dog is stationary; at each stop the module collects
+multiple RSSI samples, discards outliers, and uses the median before solving.
+The marker also appears as a 2D overlay on the camera image, but only when it
+projects inside the frame — i.e. when the dog is looking toward where the tag was found.
 
 Why the default is in-process
 -----------------------------
@@ -71,14 +73,72 @@ logger = setup_logger()
 
 DEFAULT_URL = "http://10.42.200.240:8765/api/v1/tags/active"
 
+# Marker quality tiers (see ``_quality_color`` / ``_quality_state``).
+QUALITY_BLUE = 0.4
+QUALITY_GREEN = 0.85
+
 
 @dataclass
 class _Obs:
-    """One RFID sighting: where the dog was and how strong the signal was."""
+    """One finalized RFID sighting at a stationary anchor point."""
 
     pos: np.ndarray  # dog position (x, y, z) in the world frame at sighting
-    rssi: float  # RSSI in dBm (less negative == stronger == closer)
+    rssi: float  # filtered median RSSI in dBm at this anchor
     ts: float
+    n_samples: int = 1  # raw RSSI samples that contributed to this anchor
+
+
+@dataclass
+class _Anchor:
+    """RSSI samples collected while the dog is stationary at one position."""
+
+    pos: np.ndarray
+    rssi_samples: list[float] = field(default_factory=list)
+    last_ts: float = 0.0
+
+    def add_sample(self, rssi: float, ts: float) -> None:
+        self.rssi_samples.append(float(rssi))
+        self.last_ts = ts
+
+
+def _filter_rssi_outliers(samples: list[float]) -> list[float]:
+    """Drop noisy RSSI outliers (IQR rule); keep all if too few to filter."""
+    if len(samples) < 4:
+        return samples
+    arr = np.asarray(samples, dtype=float)
+    q1, q3 = np.percentile(arr, [25, 75])
+    iqr = float(q3 - q1)
+    if iqr < 0.5:
+        return samples
+    lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+    filtered = [s for s in samples if lo <= s <= hi]
+    return filtered if filtered else samples
+
+
+@dataclass
+class _DogMotionTracker:
+    """Tracks whether the dog is stationary enough to record RFID readings."""
+
+    stationary_speed_mps: float = 0.05
+    _prev_pos: np.ndarray | None = None
+    _prev_ts: float | None = None
+    is_stationary: bool = False
+
+    def update(self, pos: np.ndarray, ts: float) -> bool:
+        """Update motion state; return True when the dog is stationary."""
+        pos = np.asarray(pos, dtype=float)
+        if self._prev_pos is None or self._prev_ts is None:
+            self._prev_pos = pos
+            self._prev_ts = ts
+            self.is_stationary = False
+            return False
+
+        dt = max(ts - self._prev_ts, 1e-3)
+        speed = float(np.linalg.norm(pos - self._prev_pos) / dt)
+        self._prev_pos = pos
+        self._prev_ts = ts
+        self.is_stationary = speed <= self.stationary_speed_mps
+        return self.is_stationary
 
 
 @dataclass
@@ -87,10 +147,11 @@ class _TagLocalizer:
 
     A single UHF-RFID reading gives only signal strength (no bearing, no range),
     so one sighting can't localize a tag. As the dog observes the same EPC from
-    several *spatially distinct* positions, each RSSI is converted to a rough
-    range via a log-distance path-loss model, and the tag position is solved by
-    linear least-squares multilateration (in the ground plane; z is taken as the
-    mean sighting height since a ground robot barely changes altitude).
+    several *spatially distinct* stationary positions, each anchor's RSSI samples
+    are outlier-filtered and reduced to a median, converted to a rough range via a
+    log-distance path-loss model, and the tag position is solved by linear
+    least-squares multilateration (in the ground plane; z is taken as the mean
+    sighting height since a ground robot barely changes altitude).
 
     Until there are enough well-spread sightings, ``estimate()`` returns a
     low-quality "placeholder" (the RSSI-weighted centroid of the dog poses).
@@ -98,22 +159,37 @@ class _TagLocalizer:
 
     rssi_ref_dbm: float = -50.0  # expected RSSI at 1 m (reference power)
     path_loss_n: float = 2.0  # path-loss exponent (2 free space, 2-4 indoor)
-    min_baseline_m: float = 0.3  # min dog travel before logging a new sighting
+    min_baseline_m: float = 0.3  # min dog travel before a new anchor
+    min_rssi_samples: int = 3  # prefer this many samples before closing an anchor
     max_range_m: float = 15.0  # reject solutions this far from the sightings
     obs: list[_Obs] = field(default_factory=list)
+    _current_anchor: _Anchor | None = None
 
-    def add(self, pos: np.ndarray, rssi: float, ts: float) -> None:
-        """Record a sighting, but only from a meaningfully new dog position.
-
-        Re-detections from ~the same spot don't add spatial information; we keep
-        the strongest RSSI seen there instead of piling up duplicates.
-        """
+    def add_stationary_sample(self, pos: np.ndarray, rssi: float, ts: float) -> None:
+        """Accumulate RSSI while the dog is stopped at (or near) an anchor point."""
         pos = np.asarray(pos, dtype=float)
-        if self.obs and np.linalg.norm(pos - self.obs[-1].pos) < self.min_baseline_m:
-            if rssi > self.obs[-1].rssi:
-                self.obs[-1] = _Obs(self.obs[-1].pos, float(rssi), ts)
+        anchor = self._current_anchor
+        if anchor is None or np.linalg.norm(pos - anchor.pos) >= self.min_baseline_m:
+            self.finalize_current_anchor()
+            self._current_anchor = _Anchor(pos=pos.copy(), last_ts=ts)
+            anchor = self._current_anchor
+        anchor.add_sample(rssi, ts)
+
+    def finalize_current_anchor(self) -> None:
+        """Close the open anchor: filter outliers, median RSSI, append to obs."""
+        anchor = self._current_anchor
+        self._current_anchor = None
+        if anchor is None or not anchor.rssi_samples:
             return
-        self.obs.append(_Obs(pos, float(rssi), ts))
+        filtered = _filter_rssi_outliers(anchor.rssi_samples)
+        if len(filtered) < self.min_rssi_samples and len(anchor.rssi_samples) < self.min_rssi_samples:
+            return
+        rssi = float(np.median(filtered))
+        # Replace the previous obs from the same spot if we re-stopped nearby.
+        if self.obs and np.linalg.norm(anchor.pos - self.obs[-1].pos) < self.min_baseline_m:
+            self.obs[-1] = _Obs(anchor.pos, rssi, anchor.last_ts, len(filtered))
+        else:
+            self.obs.append(_Obs(anchor.pos, rssi, anchor.last_ts, len(filtered)))
 
     def _rssi_to_distance(self, rssi: np.ndarray) -> np.ndarray:
         """Log-distance path-loss model: d = 10 ** ((rssi_ref - rssi) / (10 n))."""
@@ -122,8 +198,9 @@ class _TagLocalizer:
     def estimate(self) -> tuple[np.ndarray, float, int]:
         """Return (position_xyz, quality[0..1], n_observations).
 
-        quality < ~0.4 means "still estimating" (placeholder); higher means a
-        multilateration fit backed by several spread-out sightings.
+        quality < QUALITY_BLUE: centroid placeholder ("estimating").
+        QUALITY_BLUE..QUALITY_GREEN: multilateration ("refining").
+        quality >= QUALITY_GREEN: high-confidence multilateration ("located").
         """
         n = len(self.obs)
         pts = np.array([o.pos for o in self.obs])
@@ -134,8 +211,7 @@ class _TagLocalizer:
         centroid = (weights[:, None] * pts).sum(axis=0) / weights.sum()
 
         if n < 3:
-            # Not enough baselines to trilaterate yet: placeholder only.
-            return centroid, min(0.3, 0.1 * n), n
+            return centroid, min(0.35, 0.1 * n), n
 
         # Linear least-squares multilateration in the ground plane (x, y).
         dist = self._rssi_to_distance(rssi)
@@ -151,19 +227,29 @@ class _TagLocalizer:
         try:
             sol, _res, rank, _sv = np.linalg.lstsq(a_mat, b_vec, rcond=None)
         except np.linalg.LinAlgError:
-            return centroid, 0.3, n
+            return centroid, 0.25, n
         if rank < 2 or not np.all(np.isfinite(sol)):
-            return centroid, 0.3, n
+            return centroid, 0.25, n
 
         est = np.array([sol[0], sol[1], float(pts[:, 2].mean())])
         if np.linalg.norm(est[:2] - pts[:, :2].mean(axis=0)) > self.max_range_m:
-            # Degenerate/noisy solve flew off; trust the centroid instead.
-            return centroid, 0.3, n
+            return centroid, 0.25, n
 
-        # More sightings + wider spatial spread -> higher confidence.
+        # Residual-based fit quality: lower residual -> higher confidence.
+        residuals = []
+        for i in range(n):
+            predicted = float(np.linalg.norm(est[:2] - pts[i, :2]))
+            residuals.append(abs(predicted - dist[i]))
+        mean_residual = float(np.mean(residuals)) if residuals else 999.0
+        residual_score = max(0.0, 1.0 - mean_residual / 2.0)
+
         spread = float(np.linalg.norm(pts[:, :2].std(axis=0)))
-        quality = min(1.0, 0.4 + 0.1 * n) * min(1.0, spread / 1.0)
-        return est, max(0.4, quality), n
+        spread_score = min(1.0, spread / 1.5)
+        count_score = min(1.0, (n - 2) / 5.0)
+
+        quality = 0.2 * count_score + 0.35 * spread_score + 0.45 * residual_score
+        quality = float(np.clip(quality, 0.0, 1.0))
+        return est, quality, n
 
 
 class RFIDConfig(ModuleConfig):
@@ -211,7 +297,23 @@ class RFIDConfig(ModuleConfig):
     rssi_ref_dbm: float = Field(default=-50.0, description="Expected RSSI (dBm) at 1 m.")
     path_loss_n: float = Field(default=2.0, description="Path-loss exponent (2 free space).")
     min_baseline_m: float = Field(
-        default=0.3, gt=0, description="Min dog travel before recording a new sighting."
+        default=0.3, gt=0, description="Min dog travel before recording a new anchor."
+    )
+    stationary_speed_mps: float = Field(
+        default=0.05,
+        ge=0,
+        description="Max dog speed (m/s) to count as stationary for RSSI sampling.",
+    )
+    min_rssi_samples: int = Field(
+        default=3,
+        ge=1,
+        description="Min RSSI samples per anchor before closing it (outliers filtered).",
+    )
+    quality_blue: float = Field(
+        default=QUALITY_BLUE, ge=0, le=1, description="Quality threshold for blue markers."
+    )
+    quality_green: float = Field(
+        default=QUALITY_GREEN, ge=0, le=1, description="Quality threshold for green markers."
     )
 
 
@@ -237,6 +339,7 @@ class RFIDModule(Module):
     _rerun_connected: bool = False
     # EPC -> localizer accumulating that tag's sightings.
     _locs: dict[str, _TagLocalizer] | None = None
+    _motion: _DogMotionTracker | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         # Support `RFIDModule.blueprint(config=RFIDConfig())` and direct
@@ -260,6 +363,7 @@ class RFIDModule(Module):
             # Standalone: this module opens and owns the DimOS viewer.
             self._start_owned_viewer()
         self._locs = {}
+        self._motion = _DogMotionTracker(stationary_speed_mps=self.config.stationary_speed_mps)
         if self.config.spatial:
             # Touch the TF listener early so /tf is buffering before we look up poses.
             _ = self.tf
@@ -399,26 +503,34 @@ class RFIDModule(Module):
             return
 
         assert self._locs is not None
+        assert self._motion is not None
 
         # Where is the dog right now? Without a pose we can't add sightings.
         dog = self._tf_matrix(self.config.world_frame, self.config.base_frame)
         if dog is not None:
             dog_pos = dog[:3, 3]
             now = time.time()
-            for tag in payload.get("tags", []) or []:
-                epc = tag.get("epc")
-                rssi = tag.get("rssi_dbm")
-                if not epc or rssi is None:
-                    continue
-                loc = self._locs.get(epc)
-                if loc is None:
-                    loc = _TagLocalizer(
-                        rssi_ref_dbm=self.config.rssi_ref_dbm,
-                        path_loss_n=self.config.path_loss_n,
-                        min_baseline_m=self.config.min_baseline_m,
-                    )
-                    self._locs[epc] = loc
-                loc.add(dog_pos, float(rssi), now)
+            stationary = self._motion.update(dog_pos, now)
+            if not stationary:
+                # Dog is moving — close any open anchors without adding samples.
+                for loc in self._locs.values():
+                    loc.finalize_current_anchor()
+            else:
+                for tag in payload.get("tags", []) or []:
+                    epc = tag.get("epc")
+                    rssi = tag.get("rssi_dbm")
+                    if not epc or rssi is None:
+                        continue
+                    loc = self._locs.get(epc)
+                    if loc is None:
+                        loc = _TagLocalizer(
+                            rssi_ref_dbm=self.config.rssi_ref_dbm,
+                            path_loss_n=self.config.path_loss_n,
+                            min_baseline_m=self.config.min_baseline_m,
+                            min_rssi_samples=self.config.min_rssi_samples,
+                        )
+                        self._locs[epc] = loc
+                    loc.add_stationary_sample(dog_pos, float(rssi), now)
 
         # world -> camera_optical, for projecting markers into the image.
         cam_from_world = self._tf_matrix(self.config.camera_frame, self.config.world_frame)
@@ -443,17 +555,25 @@ class RFIDModule(Module):
         except Exception:  # noqa: BLE001
             return None
 
-    @staticmethod
-    def _quality_color(quality: float) -> list[int]:
-        """Gray while still estimating, green once well localized."""
-        if quality < 0.4:
-            return [150, 150, 150]
-        return [40, 200, 90]
+    def _quality_color(self, quality: float) -> list[int]:
+        """Gray (estimating) -> blue (refining) -> green (located)."""
+        if quality >= self.config.quality_green:
+            return [40, 200, 90]
+        if quality >= self.config.quality_blue:
+            return [60, 130, 255]
+        return [150, 150, 150]
+
+    def _quality_state(self, quality: float) -> str:
+        if quality >= self.config.quality_green:
+            return "located"
+        if quality >= self.config.quality_blue:
+            return "refining"
+        return "estimating"
 
     def _log_marker_3d(
         self, rr: Any, epc: str, est: np.ndarray, quality: float, n_obs: int
     ) -> None:
-        state = "estimating" if quality < 0.4 else "located"
+        state = self._quality_state(quality)
         # Uncertain tags get a bigger, fuzzier dot; confident ones a tight dot.
         radius = float(0.30 * (1.0 - quality) + 0.05)
         label = f"{epc[-8:]} ({state}, n={n_obs})"
@@ -523,6 +643,9 @@ class RFIDModule(Module):
     def stop(self) -> None:
         if self._stop_flag is not None:
             self._stop_flag.set()
+        if self._locs is not None:
+            for loc in self._locs.values():
+                loc.finalize_current_anchor()
         task = self._poll_task
         if task is not None:
             # Wait for the loop to exit on its own so the future resolves
@@ -581,8 +704,7 @@ def run_with_go2(config: RFIDConfig) -> None:
     camera | 3D | RFID layout. This module logs its tags to the RFID entity that
     the panel reads; the Go2 modules feed camera + lidar to the same viewer.
     """
-    from dimos.hardware.sensors.rfid.bridge import RFID_RERUN_ENTITY
-    from dimos.hardware.sensors.rfid.rfid_rerun import go2_rfid_rerun_config
+    from dimos_rfid.rfid_rerun import RFID_RERUN_ENTITY, go2_rfid_rerun_config
     from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
     from dimos.visualization.rerun.bridge import RerunBridgeModule
 
