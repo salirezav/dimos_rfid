@@ -1,6 +1,6 @@
 # RFID focus list — one EPC (or suffix) per line.
 # Empty file = show ALL tags. Edit while running; changes apply next poll.
 # Examples:
-   8f
-   f0
+8f
+f0
 #   E280116060000203B5A908F
