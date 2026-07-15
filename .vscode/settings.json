@@ -1,5 +1,5 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.defaultInterpreterPath": "/home/engr-ugaif/Desktop/Alireza_dimos_rfid/dimos_rfid/.venv/bin/python",
     "python.terminal.activateEnvironment": true,
     "python.venvPath": "${workspaceFolder}",
     "python.venvFolders": [".venv"],

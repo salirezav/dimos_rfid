@@ -326,6 +326,64 @@ MARKERS_3D_ENTITY = "world/rfid/markers"  # 3D world view
 # space and only render when the point projects inside the frame.
 CAMERA_IMAGE_ENTITY = "world/color_image"
 
+# Go2 Rerun panel origin (must match ``_go2_rfid_rerun_blueprint``).
+GO2_RFID_RERUN_ENTITY = "world/rfid/tags"
+
+
+def _go2_rfid_rerun_blueprint() -> Any:
+    """Go2 layout: Camera | 3D map | RFID tag list."""
+    import rerun as rr
+    import rerun.blueprint as rrb
+
+    if hasattr(rrb, "TextDocumentView"):
+        rfid_view = rrb.TextDocumentView(origin=GO2_RFID_RERUN_ENTITY, name="RFID")
+    else:
+        rfid_view = rrb.TextLogView(origin=GO2_RFID_RERUN_ENTITY, name="RFID")
+
+    return rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Spatial2DView(origin="world/color_image", name="Camera"),
+            rrb.Spatial3DView(
+                origin="world",
+                name="3D",
+                background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
+                line_grid=rrb.LineGrid3D(
+                    plane=rr.components.Plane3D.XY.with_distance(0.5),
+                ),
+                overrides={
+                    "world/lidar": rrb.EntityBehavior(visible=False),
+                },
+            ),
+            rfid_view,
+            column_shares=[2, 3, 1],
+        ),
+        rrb.TimePanel(state="collapsed"),
+        rrb.SelectionPanel(state="collapsed"),
+    )
+
+
+def _go2_rfid_rerun_config() -> dict[str, Any]:
+    """Merge Go2 Rerun settings with the RFID panel layout."""
+    from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
+
+    cfg = {**rerun_config}
+    cfg["blueprint"] = _go2_rfid_rerun_blueprint
+
+    visual_override = dict(cfg.get("visual_override", {}))
+    visual_override[GO2_RFID_RERUN_ENTITY] = lambda _msg: None
+    cfg["visual_override"] = visual_override
+
+    max_hz = dict(cfg.get("max_hz", {}))
+    max_hz[GO2_RFID_RERUN_ENTITY] = 1.0
+    cfg["max_hz"] = max_hz
+
+    if "pubsubs" not in cfg:
+        from dimos.protocol.pubsub.impl.lcmpubsub import LCM
+
+        cfg["pubsubs"] = [LCM()]
+
+    return cfg
+
 
 class RFIDModule(Module):
     """Polls the RFID API in an async background loop and prints results."""
@@ -704,7 +762,6 @@ def run_with_go2(config: RFIDConfig) -> None:
     camera | 3D | RFID layout. This module logs its tags to the RFID entity that
     the panel reads; the Go2 modules feed camera + lidar to the same viewer.
     """
-    from dimos_rfid.rfid_rerun import RFID_RERUN_ENTITY, go2_rfid_rerun_config
     from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
     from dimos.visualization.rerun.bridge import RerunBridgeModule
 
@@ -714,7 +771,7 @@ def run_with_go2(config: RFIDConfig) -> None:
         update={
             "rerun": True,
             "rerun_spawn": False,
-            "rerun_entity": RFID_RERUN_ENTITY,
+            "rerun_entity": GO2_RFID_RERUN_ENTITY,
             "spatial": True,
         }
     )
@@ -725,7 +782,7 @@ def run_with_go2(config: RFIDConfig) -> None:
         RFIDModule.blueprint(config=config),
         # Same class as the Go2's own bridge, so this overrides its layout
         # (later module wins) -> camera | 3D | RFID.
-        RerunBridgeModule.blueprint(**go2_rfid_rerun_config()),
+        RerunBridgeModule.blueprint(**_go2_rfid_rerun_config()),
     )
     coordinator = ModuleCoordinator.build(blueprint)
     try:

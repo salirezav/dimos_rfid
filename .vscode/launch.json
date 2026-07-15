@@ -37,8 +37,12 @@
             "program": "${workspaceFolder}/rfid_module/rfid_module.py",
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.venv/bin/python",
-            "cwd": "${workspaceFolder}/rfid_module",
-            "justMyCode": false
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "env": {
+                "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+                "VIRTUAL_ENV": "${workspaceFolder}/.venv"
+            }
         },
         {
             // Opens the DimOS (Rerun) viewer and shows the live tag list in a
@@ -52,15 +56,18 @@
             "args": ["--ui"],
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.venv/bin/python",
-            "cwd": "${workspaceFolder}/rfid_module",
+            "cwd": "${workspaceFolder}",
             "justMyCode": false,
-            "env": { "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}" }
+            "env": {
+                "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+                "VIRTUAL_ENV": "${workspaceFolder}/.venv"
+            }
         },
         {
             // Full robot view: runs the real Go2 stack (camera + 3D lidar) and
             // overrides its Rerun layout with camera | 3D | RFID. Needs the robot
             // reachable (same as `dimos run unitree-go2`) and the "unitree" extra
-            // installed in the venv. The PATH entry resolves "dimos-viewer".
+            // installed in the venv. Uses .venv/bin/python explicitly (not python3).
             "name": "RFID + Go2: full DimOS UI (camera | 3D | RFID)",
             "type": "debugpy",
             "request": "launch",
@@ -68,10 +75,13 @@
             "args": ["--go2"],
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.venv/bin/python",
-            "cwd": "${workspaceFolder}/rfid_module",
+            "cwd": "${workspaceFolder}",
             "justMyCode": false,
             "subProcess": true,
-            "env": { "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}" }
+            "env": {
+                "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+                "VIRTUAL_ENV": "${workspaceFolder}/.venv"
+            }
         },
         {
             // Runs via ModuleCoordinator, which deploys the module into a
@@ -84,9 +94,13 @@
             "args": ["--coordinator"],
             "console": "integratedTerminal",
             "python": "${workspaceFolder}/.venv/bin/python",
-            "cwd": "${workspaceFolder}/rfid_module",
+            "cwd": "${workspaceFolder}",
             "justMyCode": false,
-            "subProcess": true
+            "subProcess": true,
+            "env": {
+                "PATH": "${workspaceFolder}/.venv/bin:${env:PATH}",
+                "VIRTUAL_ENV": "${workspaceFolder}/.venv"
+            }
         },
         {
             "name": "Python Debugger: Current File",
