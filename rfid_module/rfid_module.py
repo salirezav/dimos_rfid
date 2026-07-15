@@ -581,9 +581,21 @@ def run_with_go2(config: RFIDConfig) -> None:
     camera | 3D | RFID layout. This module logs its tags to the RFID entity that
     the panel reads; the Go2 modules feed camera + lidar to the same viewer.
     """
-    from dimos.hardware.sensors.rfid.bridge import RFID_RERUN_ENTITY
-    from dimos.hardware.sensors.rfid.rfid_rerun import go2_rfid_rerun_config
-    from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
+    try:
+        from dimos.hardware.sensors.rfid.bridge import RFID_RERUN_ENTITY
+        from dimos.hardware.sensors.rfid.rfid_rerun import go2_rfid_rerun_config
+    except ModuleNotFoundError:
+        # Local development: the package lives at dimos_rfid/ in this repo.
+        from dimos_rfid.rfid_rerun import RFID_RERUN_ENTITY, go2_rfid_rerun_config
+    try:
+        from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
+    except ModuleNotFoundError as exc:
+        logger.error(
+            "Go2/Unitree dependencies are missing: %s.\n"
+            "Install the Unitree extras in your environment, e.g. `pip install 'dimos[unitree]'`",
+            exc,
+        )
+        return
     from dimos.visualization.rerun.bridge import RerunBridgeModule
 
     # Log into the bridge's viewer (don't spawn our own) at the panel's entity.
