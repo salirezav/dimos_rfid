@@ -466,6 +466,11 @@ def _go2_rfid_rerun_blueprint() -> Any:
     )
 
 
+def _rfid_visual_override(_msg: Any) -> Any:
+    """No-op visual override for the RFID text panel (must be picklable for workers)."""
+    return None
+
+
 def _go2_rfid_rerun_config() -> dict[str, Any]:
     """Merge Go2 Rerun settings with the RFID panel layout."""
     from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
@@ -474,7 +479,7 @@ def _go2_rfid_rerun_config() -> dict[str, Any]:
     cfg["blueprint"] = _go2_rfid_rerun_blueprint
 
     visual_override = dict(cfg.get("visual_override", {}))
-    visual_override[GO2_RFID_RERUN_ENTITY] = lambda _msg: None
+    visual_override[GO2_RFID_RERUN_ENTITY] = _rfid_visual_override
     cfg["visual_override"] = visual_override
 
     max_hz = dict(cfg.get("max_hz", {}))
