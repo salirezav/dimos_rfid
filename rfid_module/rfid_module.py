@@ -24,8 +24,10 @@ the same EPC from different positions, the RSSI values are multilaterated into a
 world position (gray "estimating" -> blue "refining" -> green "located"). Readings
 are only recorded while the dog is stationary; at each stop the module collects
 multiple RSSI samples, discards outliers, and uses the median before solving.
-The marker also appears as a 2D overlay on the camera image, but only when it
-projects inside the frame — i.e. when the dog is looking toward where the tag was found.
+In crowded environments, edit ``rfid_focus.txt`` (one EPC/suffix per line) to
+focus the UI on selected tags and hide the rest. The marker also appears as a 2D
+overlay on the camera image, but only when it projects inside the frame — i.e.
+when the dog is looking toward where the tag was found.
 
 Why the default is in-process
 -----------------------------
@@ -57,6 +59,7 @@ import threading
 import time
 from concurrent.futures import Future
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -139,6 +142,87 @@ class _DogMotionTracker:
         self._prev_ts = ts
         self.is_stationary = speed <= self.stationary_speed_mps
         return self.is_stationary
+
+
+@dataclass
+class _FocusFilter:
+    """Selects which EPCs to show/localize; empty patterns = show everything.
+
+    Patterns match case-insensitively as substrings, so a short suffix like
+    ``8f`` focuses the full EPC ending in ``…8f``. Combine ``config.focus_epcs``
+    with a live-watched ``focus_file`` (one EPC/suffix per line).
+    """
+
+    config_patterns: list[str] = field(default_factory=list)
+    focus_file: str = ""
+    _file_patterns: list[str] = field(default_factory=list)
+    _file_mtime: float | None = None
+    _rpc_patterns: list[str] | None = None  # None = unset; [] = clear via RPC
+
+    def set_rpc_focus(self, patterns: list[str] | None) -> None:
+        """Override focus from an RPC call. ``None`` clears the RPC override."""
+        self._rpc_patterns = None if patterns is None else [p.strip() for p in patterns if p.strip()]
+
+    def _parse_file(self, path: Path) -> list[str]:
+        patterns: list[str] = []
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            # Allow comma-separated EPCs on one line.
+            for part in line.split(","):
+                part = part.strip()
+                if part and not part.startswith("#"):
+                    patterns.append(part)
+        return patterns
+
+    def _reload_file_if_needed(self) -> None:
+        if not self.focus_file:
+            self._file_patterns = []
+            self._file_mtime = None
+            return
+        path = Path(self.focus_file)
+        if not path.is_file():
+            self._file_patterns = []
+            self._file_mtime = None
+            return
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            return
+        if self._file_mtime is not None and mtime == self._file_mtime:
+            return
+        self._file_mtime = mtime
+        self._file_patterns = self._parse_file(path)
+
+    def patterns(self) -> list[str]:
+        self._reload_file_if_needed()
+        if self._rpc_patterns is not None:
+            return list(self._rpc_patterns)
+        out: list[str] = []
+        seen: set[str] = set()
+        for p in [*self.config_patterns, *self._file_patterns]:
+            key = p.lower()
+            if key not in seen:
+                seen.add(key)
+                out.append(p)
+        return out
+
+    @property
+    def active(self) -> bool:
+        return bool(self.patterns())
+
+    def matches(self, epc: str) -> bool:
+        """True if this EPC should be shown (always True when filter inactive)."""
+        pats = self.patterns()
+        if not pats:
+            return True
+        epc_l = epc.lower()
+        return any(p.lower() in epc_l for p in pats)
 
 
 @dataclass
@@ -316,6 +400,26 @@ class RFIDConfig(ModuleConfig):
         default=QUALITY_GREEN, ge=0, le=1, description="Quality threshold for green markers."
     )
 
+    # --- Tag focus / clutter control ---
+    focus_epcs: list[str] = Field(
+        default_factory=list,
+        description="EPC full strings or suffixes to focus on. Empty = show all tags. "
+        "Matched case-insensitively as substring (so '8f' matches '...8f').",
+    )
+    focus_file: str = Field(
+        default="",
+        description="Optional path to a text file listing EPCs/suffixes (one per line, "
+        "# comments OK). Reloaded live when the file changes. Empty string disables.",
+    )
+    focus_only_localize: bool = Field(
+        default=True,
+        description="When a focus filter is active, only accumulate localization for "
+        "focused tags (ignores clutter). Display always respects focus.",
+    )
+
+
+# Default live-editable focus list beside this module (create on first run if needed).
+DEFAULT_FOCUS_FILE = str(Path(__file__).resolve().parent / "rfid_focus.txt")
 
 # Rerun entity path for the standalone RFID text panel.
 RERUN_ENTITY = "rfid"
@@ -398,6 +502,11 @@ class RFIDModule(Module):
     # EPC -> localizer accumulating that tag's sightings.
     _locs: dict[str, _TagLocalizer] | None = None
     _motion: _DogMotionTracker | None = None
+    _focus: _FocusFilter | None = None
+    # EPCs ever seen (for discovery list in the panel when filtering).
+    _seen_epcs: dict[str, float] | None = None  # epc -> last rssi_dbm
+    # Markers we've drawn so we can Clear() them when focus hides them.
+    _drawn_markers: set[str] | None = None
 
     def __init__(self, **kwargs: Any) -> None:
         # Support `RFIDModule.blueprint(config=RFIDConfig())` and direct
@@ -421,12 +530,79 @@ class RFIDModule(Module):
             # Standalone: this module opens and owns the DimOS viewer.
             self._start_owned_viewer()
         self._locs = {}
+        self._seen_epcs = {}
+        self._drawn_markers = set()
+        focus_file = self.config.focus_file or DEFAULT_FOCUS_FILE
+        self._ensure_focus_file(focus_file)
+        self._focus = _FocusFilter(
+            config_patterns=list(self.config.focus_epcs),
+            focus_file=focus_file,
+        )
         self._motion = _DogMotionTracker(stationary_speed_mps=self.config.stationary_speed_mps)
         if self.config.spatial:
             # Touch the TF listener early so /tf is buffering before we look up poses.
             _ = self.tf
         self._stop_flag = threading.Event()
         self._poll_task = self.spawn(self._poll_loop())
+        if self._focus is not None and self._focus.patterns():
+            logger.info("RFID focus filter active: %s", self._focus.patterns())
+        else:
+            logger.info(
+                "RFID focus: showing all tags. Edit %s (one EPC/suffix per line) to focus.",
+                focus_file,
+            )
+
+    @staticmethod
+    def _ensure_focus_file(path: str) -> None:
+        """Create an empty focus file with usage comments if it doesn't exist."""
+        p = Path(path)
+        if p.exists():
+            return
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(
+                "# RFID focus list — one EPC (or suffix) per line.\n"
+                "# Empty file = show ALL tags. Edit while running; changes apply next poll.\n"
+                "# Examples:\n"
+                "#   8f\n"
+                "#   E280116060000203B5A908F\n"
+                "\n",
+                encoding="utf-8",
+            )
+            logger.info("Created focus file at %s (empty = show all)", path)
+        except OSError as exc:
+            logger.warning("Could not create focus file %s: %s", path, exc)
+
+    @rpc
+    def set_focus(self, epcs: list[str] | None = None) -> dict[str, Any]:
+        """Focus the UI on specific EPCs/suffixes.
+
+        - ``set_focus(["8f", "ab"])`` — show only matching tags
+        - ``set_focus([])`` — show all (ignore focus file until changed)
+        - ``set_focus(None)`` — drop RPC override; use focus file + config again
+        """
+        assert self._focus is not None
+        if epcs is None:
+            self._focus.set_rpc_focus(None)
+            logger.info("RFID focus RPC override cleared — using file/config")
+        else:
+            self._focus.set_rpc_focus(list(epcs))
+            logger.info("RFID focus set: %s", self._focus.patterns() or "(all)")
+        pats = self._focus.patterns()
+        return {"focus": pats, "active": bool(pats), "focus_file": self._focus.focus_file}
+
+    @rpc
+    def get_focus(self) -> dict[str, Any]:
+        """Return current focus patterns and discovered EPCs."""
+        assert self._focus is not None
+        pats = self._focus.patterns()
+        seen = list((self._seen_epcs or {}).keys())
+        return {
+            "focus": pats,
+            "active": bool(pats),
+            "discovered": seen,
+            "focus_file": self._focus.focus_file,
+        }
 
     def _start_owned_viewer(self) -> None:
         """Open the DimOS (Rerun) viewer and lay out a single RFID text panel."""
@@ -476,6 +652,7 @@ class RFIDModule(Module):
                     response = await client.get(self.config.url)
                     response.raise_for_status()
                     payload = response.json()
+                    self._remember_seen(payload)
                     self._print_tags(payload)
                     if self.config.rerun:
                         self._log_rerun(payload)
@@ -487,35 +664,108 @@ class RFIDModule(Module):
                     logger.warning("RFID poll error: %s", exc)
                 await asyncio.sleep(self.config.interval)
 
-    @staticmethod
-    def _print_tags(payload: dict) -> None:
+    def _remember_seen(self, payload: dict) -> None:
+        assert self._seen_epcs is not None
+        for tag in payload.get("tags", []) or []:
+            epc = tag.get("epc")
+            if not epc:
+                continue
+            rssi = tag.get("rssi_dbm")
+            self._seen_epcs[epc] = float(rssi) if rssi is not None else float("nan")
+
+    def _is_focused(self, epc: str) -> bool:
+        assert self._focus is not None
+        return self._focus.matches(epc)
+
+    def _print_tags(self, payload: dict) -> None:
         count = payload.get("count", 0)
         tags = payload.get("tags", []) or []
+        focus = self._focus
+        active = bool(focus and focus.active)
         if not tags:
             print(f"[RFID] {count} tag(s) in range")
             return
-        print(f"[RFID] {count} tag(s) in range:")
-        for tag in tags:
+        shown = [t for t in tags if self._is_focused(t.get("epc", ""))] if active else tags
+        hidden_n = len(tags) - len(shown)
+        hdr = f"[RFID] {count} tag(s) in range"
+        if active:
+            hdr += f" — focus {focus.patterns()} (showing {len(shown)}, hiding {hidden_n})"
+        print(f"{hdr}:")
+        for tag in shown:
             epc = tag.get("epc", "?")
             rssi = tag.get("rssi_dbm")
             rssi_s = f"{rssi} dBm" if rssi is not None else "unknown RSSI"
             print(f"    EPC={epc}  RSSI={rssi_s}")
+        if active and hidden_n:
+            print(f"    … {hidden_n} other tag(s) hidden (edit focus file to show)")
 
-    @staticmethod
-    def _tags_markdown(payload: dict) -> str:
-        count = payload.get("count", 0)
+    def _tags_markdown(self, payload: dict) -> str:
         tags = payload.get("tags", []) or []
-        lines = [f"# RFID — {count} tag(s) in range", ""]
-        if not tags:
-            lines.append("_No tags in range._")
+        focus = self._focus
+        assert focus is not None
+        assert self._seen_epcs is not None
+        pats = focus.patterns()
+        active = bool(pats)
+
+        in_range = {t.get("epc"): t.get("rssi_dbm") for t in tags if t.get("epc")}
+        # Prefer live RSSI; fall back to last-seen.
+        for epc, rssi in in_range.items():
+            if rssi is not None:
+                self._seen_epcs[epc] = float(rssi)
+
+        focused = sorted(epc for epc in self._seen_epcs if focus.matches(epc))
+        others = sorted(epc for epc in self._seen_epcs if not focus.matches(epc)) if active else []
+
+        lines: list[str] = []
+        if active:
+            lines.append(f"# RFID focus — {len(focused)} selected / {len(self._seen_epcs)} discovered")
+            lines.append("")
+            lines.append(f"_Filter: `{', '.join(pats)}`_")
+            lines.append(f"_Edit `{focus.focus_file}` (one EPC/suffix per line) to change._")
+            lines.append("")
+            lines.append("## Focused")
+            if not focused:
+                lines.append("_No matching tags yet — walk near the tag or check the suffix._")
+            else:
+                lines.append("| EPC | RSSI |")
+                lines.append("|-----|------|")
+                for epc in focused:
+                    rssi = in_range.get(epc, self._seen_epcs.get(epc))
+                    mark = "" if epc in in_range else " (stale)"
+                    rssi_s = f"{rssi} dBm{mark}" if rssi is not None and rssi == rssi else "—"
+                    lines.append(f"| `{epc}` | {rssi_s} |")
+            lines.append("")
+            lines.append(f"## Hidden ({len(others)})")
+            if others:
+                lines.append("| EPC | RSSI |")
+                lines.append("|-----|------|")
+                for epc in others[:40]:  # keep the panel readable
+                    rssi = in_range.get(epc, self._seen_epcs.get(epc))
+                    mark = "" if epc in in_range else " (stale)"
+                    rssi_s = f"{rssi} dBm{mark}" if rssi is not None and rssi == rssi else "—"
+                    lines.append(f"| `{epc}` | {rssi_s} |")
+                if len(others) > 40:
+                    lines.append(f"| … | +{len(others) - 40} more |")
+            else:
+                lines.append("_None._")
         else:
-            lines.append("| EPC | RSSI |")
-            lines.append("|-----|------|")
-            for tag in tags:
-                epc = tag.get("epc", "?")
-                rssi = tag.get("rssi_dbm")
-                rssi_s = f"{rssi} dBm" if rssi is not None else "—"
-                lines.append(f"| `{epc}` | {rssi_s} |")
+            n = len(tags)
+            lines.append(f"# RFID — {n} tag(s) in range")
+            lines.append("")
+            lines.append(
+                f"_Showing all tags. Add EPC suffixes to `{focus.focus_file}` to focus / hide clutter._"
+            )
+            lines.append("")
+            if not tags:
+                lines.append("_No tags in range._")
+            else:
+                lines.append("| EPC | RSSI |")
+                lines.append("|-----|------|")
+                for tag in tags:
+                    epc = tag.get("epc", "?")
+                    rssi = tag.get("rssi_dbm")
+                    rssi_s = f"{rssi} dBm" if rssi is not None else "—"
+                    lines.append(f"| `{epc}` | {rssi_s} |")
         return "\n".join(lines)
 
     def _log_rerun(self, payload: dict) -> None:
@@ -579,6 +829,13 @@ class RFIDModule(Module):
                     rssi = tag.get("rssi_dbm")
                     if not epc or rssi is None:
                         continue
+                    if (
+                        self.config.focus_only_localize
+                        and self._focus is not None
+                        and self._focus.active
+                        and not self._is_focused(epc)
+                    ):
+                        continue
                     loc = self._locs.get(epc)
                     if loc is None:
                         loc = _TagLocalizer(
@@ -593,12 +850,33 @@ class RFIDModule(Module):
         # world -> camera_optical, for projecting markers into the image.
         cam_from_world = self._tf_matrix(self.config.camera_frame, self.config.world_frame)
 
+        assert self._drawn_markers is not None
+        visible_now: set[str] = set()
         for epc, loc in self._locs.items():
             if not loc.obs:
+                continue
+            if not self._is_focused(epc):
+                # Focus filter active and this EPC is not selected → hide markers.
+                self._clear_marker(rr, epc)
                 continue
             est, quality, n_obs = loc.estimate()
             self._log_marker_3d(rr, epc, est, quality, n_obs)
             self._log_marker_camera(rr, epc, est, quality, cam_from_world)
+            visible_now.add(epc)
+
+        # Clear markers for EPCs that left focus or were removed.
+        for epc in list(self._drawn_markers - visible_now):
+            self._clear_marker(rr, epc)
+        self._drawn_markers = visible_now
+
+    def _clear_marker(self, rr: Any, epc: str) -> None:
+        try:
+            rr.log(f"{MARKERS_3D_ENTITY}/{epc}", rr.Clear(recursive=True))
+            rr.log(f"{CAMERA_IMAGE_ENTITY}/rfid/{epc}", rr.Clear(recursive=True))
+        except Exception:  # noqa: BLE001
+            pass
+        if self._drawn_markers is not None:
+            self._drawn_markers.discard(epc)
 
     def _tf_matrix(self, parent: str, child: str) -> np.ndarray | None:
         """Latest 4x4 transform mapping points in `child` frame into `parent`."""
