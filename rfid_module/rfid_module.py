@@ -231,11 +231,11 @@ class _TagLocalizer:
 
     A single UHF-RFID reading gives only signal strength (no bearing, no range),
     so one sighting can't localize a tag. As the dog observes the same EPC from
-    several *spatially distinct* stationary positions, each anchor's RSSI samples
+    5--10 *spatially distinct* stationary positions, each anchor's RSSI samples
     are outlier-filtered and reduced to a median, converted to a rough range via a
-    log-distance path-loss model, and the tag position is solved by linear
-    least-squares multilateration (in the ground plane; z is taken as the mean
-    sighting height since a ground robot barely changes altitude).
+    log-distance path-loss model, and the tag position is solved jointly with a
+    robust Cauchy-loss multilateration (in the ground plane; z is taken as the
+    mean sighting height since a ground robot barely changes altitude).
 
     Until there are enough well-spread sightings, ``estimate()`` returns a
     low-quality "placeholder" (the RSSI-weighted centroid of the dog poses).
@@ -245,6 +245,10 @@ class _TagLocalizer:
     path_loss_n: float = 2.0  # path-loss exponent (2 free space, 2-4 indoor)
     min_baseline_m: float = 0.3  # min dog travel before a new anchor
     min_rssi_samples: int = 3  # prefer this many samples before closing an anchor
+    min_observations: int = 5  # do not solve before this many independent poses
+    max_observations: int = 10  # maximum diverse poses used in one joint solve
+    max_history_observations: int = 50  # bounded pool from which poses are selected
+    robust_loss_scale_m: float = 1.0  # Cauchy transition scale for range residuals
     max_range_m: float = 15.0  # reject solutions this far from the sightings
     obs: list[_Obs] = field(default_factory=list)
     _current_anchor: _Anchor | None = None
@@ -274,33 +278,42 @@ class _TagLocalizer:
             self.obs[-1] = _Obs(anchor.pos, rssi, anchor.last_ts, len(filtered))
         else:
             self.obs.append(_Obs(anchor.pos, rssi, anchor.last_ts, len(filtered)))
+            # Keep a bounded history. The solver later selects at most ten
+            # geometrically diverse poses rather than blindly using every read.
+            if len(self.obs) > self.max_history_observations:
+                del self.obs[: len(self.obs) - self.max_history_observations]
 
     def _rssi_to_distance(self, rssi: np.ndarray) -> np.ndarray:
         """Log-distance path-loss model: d = 10 ** ((rssi_ref - rssi) / (10 n))."""
         return 10.0 ** ((self.rssi_ref_dbm - rssi) / (10.0 * self.path_loss_n))
 
-    def estimate(self) -> tuple[np.ndarray, float, int]:
-        """Return (position_xyz, quality[0..1], n_observations).
+    def _select_diverse_observations(self) -> list[_Obs]:
+        """Choose up to ``max_observations`` well-spread, recent observations."""
+        if len(self.obs) <= self.max_observations:
+            return list(self.obs)
 
-        quality < QUALITY_BLUE: centroid placeholder ("estimating").
-        QUALITY_BLUE..QUALITY_GREEN: multilateration ("refining").
-        quality >= QUALITY_GREEN: high-confidence multilateration ("located").
-        """
-        n = len(self.obs)
-        pts = np.array([o.pos for o in self.obs])
-        rssi = np.array([o.rssi for o in self.obs])
+        # Always retain the newest observation, then greedily choose the pose
+        # farthest from the already selected set. This gives the nonlinear solve
+        # useful geometry while still adapting as the robot explores new areas.
+        chosen = [len(self.obs) - 1]
+        remaining = set(range(len(self.obs) - 1))
+        while remaining and len(chosen) < self.max_observations:
+            next_index = max(
+                remaining,
+                key=lambda index: min(
+                    float(np.linalg.norm(self.obs[index].pos[:2] - self.obs[j].pos[:2]))
+                    for j in chosen
+                ),
+            )
+            chosen.append(next_index)
+            remaining.remove(next_index)
+        return [self.obs[index] for index in sorted(chosen)]
 
-        # RSSI-weighted centroid (linear power weights) — robust fallback/prior.
-        weights = 10.0 ** (rssi / 10.0)
-        centroid = (weights[:, None] * pts).sum(axis=0) / weights.sum()
-
-        if n < 3:
-            return centroid, min(0.35, 0.1 * n), n
-
-        # Linear least-squares multilateration in the ground plane (x, y).
-        dist = self._rssi_to_distance(rssi)
-        ref = int(np.argmax(rssi))  # anchor on the strongest (closest) sighting
-        others = [i for i in range(n) if i != ref]
+    @staticmethod
+    def _linear_seed(pts: np.ndarray, dist: np.ndarray, fallback: np.ndarray) -> np.ndarray:
+        """Produce a stable linear multilateration seed for robust refinement."""
+        ref = int(np.argmin(dist))
+        others = [index for index in range(len(pts)) if index != ref]
         a_mat = 2.0 * (pts[others, :2] - pts[ref, :2])
         b_vec = (
             (pts[others, :2] ** 2).sum(axis=1)
@@ -309,29 +322,109 @@ class _TagLocalizer:
             + dist[ref] ** 2
         )
         try:
-            sol, _res, rank, _sv = np.linalg.lstsq(a_mat, b_vec, rcond=None)
+            solution, _residuals, rank, _singular = np.linalg.lstsq(a_mat, b_vec, rcond=None)
         except np.linalg.LinAlgError:
-            return centroid, 0.25, n
-        if rank < 2 or not np.all(np.isfinite(sol)):
-            return centroid, 0.25, n
+            return fallback.copy()
+        if rank < 2 or not np.all(np.isfinite(solution)):
+            return fallback.copy()
+        return np.asarray(solution, dtype=float)
 
-        est = np.array([sol[0], sol[1], float(pts[:, 2].mean())])
+    def _robust_joint_solve(
+        self, pts: np.ndarray, dist: np.ndarray, sample_weights: np.ndarray, seed: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """IRLS Gauss-Newton solve using all selected poses simultaneously."""
+        estimate = np.asarray(seed, dtype=float).copy()
+        scale = max(float(self.robust_loss_scale_m), 0.05)
+        for _ in range(30):
+            delta = estimate[None, :] - pts[:, :2]
+            predicted = np.maximum(np.linalg.norm(delta, axis=1), 1e-6)
+            residual = predicted - dist
+            # Cauchy weights strongly limit multipath/outlier influence without
+            # throwing away an otherwise valuable observation pose.
+            robust_weights = 1.0 / (1.0 + (residual / scale) ** 2)
+            weights = np.maximum(sample_weights * robust_weights, 1e-6)
+            jacobian = delta / predicted[:, None]
+            normal = jacobian.T @ (weights[:, None] * jacobian) + np.eye(2) * 1e-6
+            gradient = jacobian.T @ (weights * residual)
+            try:
+                step = np.linalg.solve(normal, gradient)
+            except np.linalg.LinAlgError:
+                break
+            if not np.all(np.isfinite(step)):
+                break
+            estimate -= step
+            if float(np.linalg.norm(step)) < 1e-4:
+                break
+
+        residual = np.linalg.norm(estimate[None, :] - pts[:, :2], axis=1) - dist
+        return estimate, residual
+
+    def estimate(self) -> tuple[np.ndarray, float, int]:
+        """Return (position_xyz, quality[0..1], n_observations).
+
+        quality < QUALITY_BLUE: centroid placeholder ("estimating").
+        QUALITY_BLUE..QUALITY_GREEN: multilateration ("refining").
+        quality >= QUALITY_GREEN: high-confidence multilateration ("located").
+        """
+        selected = self._select_diverse_observations()
+        n = len(selected)
+        pts = np.array([observation.pos for observation in selected])
+        rssi = np.array([observation.rssi for observation in selected])
+
+        # RSSI-weighted centroid (linear power weights) — robust fallback/prior.
+        weights = 10.0 ** (rssi / 10.0)
+        centroid = (weights[:, None] * pts).sum(axis=0) / weights.sum()
+
+        if n < self.min_observations:
+            # This is deliberately only a placeholder. Five independent poses
+            # are required before the marker can become "refining" or "located".
+            return centroid, min(0.35, 0.07 * n), n
+
+        dist = self._rssi_to_distance(rssi)
+        sample_weights = np.sqrt(
+            np.asarray([max(1, observation.n_samples) for observation in selected], dtype=float)
+        )
+        sample_weights /= max(float(sample_weights.max()), 1.0)
+        seed = self._linear_seed(pts, dist, centroid[:2])
+
+        # Refine from both a range-derived seed and the robust centroid; retain
+        # whichever has the smaller joint Cauchy objective.
+        candidates = []
+        for candidate_seed in (seed, centroid[:2]):
+            candidate, residual = self._robust_joint_solve(
+                pts, dist, sample_weights, candidate_seed
+            )
+            objective = float(
+                np.sum(sample_weights * np.log1p((residual / self.robust_loss_scale_m) ** 2))
+            )
+            candidates.append((objective, candidate, residual))
+        _objective, solution, residuals = min(candidates, key=lambda candidate: candidate[0])
+
+        est = np.array([solution[0], solution[1], float(pts[:, 2].mean())])
         if np.linalg.norm(est[:2] - pts[:, :2].mean(axis=0)) > self.max_range_m:
             return centroid, 0.25, n
 
-        # Residual-based fit quality: lower residual -> higher confidence.
-        residuals = []
-        for i in range(n):
-            predicted = float(np.linalg.norm(est[:2] - pts[i, :2]))
-            residuals.append(abs(predicted - dist[i]))
-        mean_residual = float(np.mean(residuals)) if residuals else 999.0
-        residual_score = max(0.0, 1.0 - mean_residual / 2.0)
+        # Median residual is resistant to a few reflected/multipath ranges.
+        median_residual = float(np.median(np.abs(residuals)))
+        residual_score = max(0.0, 1.0 - median_residual / 2.0)
 
         spread = float(np.linalg.norm(pts[:, :2].std(axis=0)))
         spread_score = min(1.0, spread / 1.5)
-        count_score = min(1.0, (n - 2) / 5.0)
+        centered = pts[:, :2] - pts[:, :2].mean(axis=0)
+        singular = np.linalg.svd(centered, compute_uv=False)
+        geometry_score = (
+            min(1.0, float(singular[1] / singular[0]) / 0.35)
+            if len(singular) > 1 and singular[0] > 1e-6
+            else 0.0
+        )
+        count_score = min(1.0, (n - self.min_observations + 1) / 4.0)
 
-        quality = 0.2 * count_score + 0.35 * spread_score + 0.45 * residual_score
+        quality = (
+            0.15 * count_score
+            + 0.25 * spread_score
+            + 0.20 * geometry_score
+            + 0.40 * residual_score
+        )
         quality = float(np.clip(quality, 0.0, 1.0))
         return est, quality, n
 
@@ -392,6 +485,23 @@ class RFIDConfig(ModuleConfig):
         default=3,
         ge=1,
         description="Min RSSI samples per anchor before closing it (outliers filtered).",
+    )
+    min_observations: int = Field(
+        default=5,
+        ge=5,
+        le=10,
+        description="Independent stationary poses required before joint localization.",
+    )
+    max_observations: int = Field(
+        default=10,
+        ge=5,
+        le=10,
+        description="Maximum geometrically diverse poses used in one robust solve.",
+    )
+    robust_loss_scale_m: float = Field(
+        default=1.0,
+        gt=0,
+        description="Cauchy loss scale limiting multipath range outliers.",
     )
     quality_blue: float = Field(
         default=QUALITY_BLUE, ge=0, le=1, description="Quality threshold for blue markers."
@@ -848,6 +958,9 @@ class RFIDModule(Module):
                             path_loss_n=self.config.path_loss_n,
                             min_baseline_m=self.config.min_baseline_m,
                             min_rssi_samples=self.config.min_rssi_samples,
+                            min_observations=self.config.min_observations,
+                            max_observations=self.config.max_observations,
+                            robust_loss_scale_m=self.config.robust_loss_scale_m,
                         )
                         self._locs[epc] = loc
                     loc.add_stationary_sample(dog_pos, float(rssi), now)
