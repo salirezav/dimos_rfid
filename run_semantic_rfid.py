@@ -13,6 +13,12 @@ Optional flags:
     uv run python run_semantic_rfid.py --help
 
 See dimos_rfid/README.md → “Semantic particle filter”.
+
+Workflow:
+  1. Edit dimos_rfid/rfid_focus.txt with your tag EPC/suffix (empty = all tags)
+  2. export ROBOT_IP and RFID_API_BASE
+  3. uv run python run_semantic_rfid.py
+  4. Read TOI [x,y,z] from logs or agent skills
 """
 
 from __future__ import annotations

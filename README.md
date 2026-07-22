@@ -279,6 +279,9 @@ RFID tag status appears as **text logs** in the Rerun viewer (via `RfidTagArray.
 
 ### Semantic particle-filter localization (recommended for TOI tracking)
 
+Same focus-file workflow as the experimental module: put an EPC/suffix in
+[`dimos_rfid/rfid_focus.txt`](dimos_rfid/rfid_focus.txt), then run:
+
 ```bash
 export ROBOT_IP=<go2-wifi-ip>
 export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
@@ -290,9 +293,12 @@ uv run python run_semantic_rfid.py
 uv run python run_semantic_rfid.py --agentic
 ```
 
-Or after integration: `uv run dimos run unitree-go2-rfid-semantic`.
+**Inputs:** RFID tags (EPC+RSSI), robot TF pose, `rfid_focus.txt` (TOI), optional semantic map.  
+**Outputs:** log lines `TOI @ [x,y,z] + conf`, plus skills `get_estimated_target_location` / `get_location_confidence`.
 
-Details, map format, and tuning: [`dimos_rfid/README.md`](dimos_rfid/README.md) → **Semantic particle filter**.
+Full I/O diagram and tuning: [`dimos_rfid/README.md`](dimos_rfid/README.md) → **Semantic particle filter**.
+
+Or after integration: `uv run dimos run unitree-go2-rfid-semantic`.
 
 Blueprint composition for `unitree-go2-rfid`:
 

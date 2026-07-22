@@ -107,6 +107,8 @@ self.rfid_tags.publish(array)   # → /rfid/tags#dimos_rfid.msgs.RfidTagArray
 | `semantic_particle_filter.py` | `SemanticParticleFilter3D` + multipath LOS gate |
 | `rfid_tracker.py` | `RFIDTracker` orchestrator (per-tag particle filters) |
 | `rfid_semantic_localizer.py` | DimOS module: TF pose + RFID tags → particle filter |
+| `rfid_focus.txt` | Live-editable TOI list (EPC / suffix per line; empty = all) |
+| `focus_filter.py` | Shared focus-file parser |
 | `semantic_rfid_blueprints.py` | `unitree_go2_rfid_semantic` blueprint |
 | `demo_blueprint.py` | `rfid_demo` — RFID + Rerun only |
 | `go2_blueprints.py` | `unitree_go2_rfid` — Go2 spatial stack + RFID |
