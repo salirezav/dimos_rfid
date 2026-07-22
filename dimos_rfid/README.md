@@ -104,7 +104,7 @@ self.rfid_tags.publish(array)     # membership/status changes → /rfid/tags
 | File | Purpose |
 |------|---------|
 | `rfid_module.py` | `RfidModule` + `RfidModuleConfig` — core DimOS Module |
-| `recorder.py` | Synchronized RFID + image + pose + trajectory data recorder |
+| `recorder.py` | Synchronized RFID + image + pose + trajectory + point-cloud-map recorder |
 | `msgs.py` | `RfidTag`, `RfidTagArray` dataclasses with `to_rerun()` |
 | `_backend.py` | Locates `rfid scanner python/` and constructs `RfidScanner` for direct mode |
 | `demo_blueprint.py` | `rfid_demo` — RFID + Rerun only |
@@ -288,13 +288,22 @@ Each session contains:
 ├── images/                  # one JPEG per RFID sample
 ├── trajectory.json          # complete machine-readable walked path
 ├── trajectory.csv
-└── trajectory.png           # top-down path preview
+├── trajectory.png           # top-down path preview
+├── pointcloud_map.npz       # NumPy points/colors for offline algorithms
+└── pointcloud_map.ply       # portable map for Open3D/CloudCompare
 <session>.zip                # portable copy of the complete session
 ```
 
 The module records the latest camera frame and pose when each full-rate
 `/rfid/samples` message arrives. Timestamps and image/pose ages remain in every
-observation so synchronization quality can be filtered during training.
+observation so synchronization quality can be filtered during training. Each
+tag entry also retains the reader's RF `phase`, antenna, frequency, and RSSI.
+
+The point-cloud files are the final accumulated `global_map` emitted by DimOS's
+`VoxelGridMapper`. This is a lidar voxel map in the `world` frame, so collection
+does not require a separate SLAM occupancy map. If no `global_map` message
+arrives, `metadata.json` records `pointcloud_map.available: false` instead of
+silently creating an empty map.
 
 ### Verify
 

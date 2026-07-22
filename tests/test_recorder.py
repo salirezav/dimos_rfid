@@ -9,8 +9,10 @@ import numpy as np
 from dimos.core.coordination.blueprints import BlueprintAtom
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.Image import Image, ImageFormat
+from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos_rfid.recorder import (
     _CapturedSample,
+    _CapturedPointCloudMap,
     _SessionWriter,
     RfidRecorderModule,
 )
@@ -69,6 +71,12 @@ def test_session_writer_exports_synchronized_dataset(tmp_path: Path) -> None:
 
     result = writer.finish(
         [_pose(1.0, 0.0, 0.0), _pose(2.0, 3.0, 4.0)],
+        _CapturedPointCloudMap(
+            points=np.asarray([[0.0, 1.0, 2.0], [3.0, 4.0, 5.0]], dtype=np.float32),
+            colors=None,
+            timestamp=2.0,
+            frame_id="world",
+        ),
         dropped_samples=0,
         create_archive=True,
     )
@@ -79,6 +87,8 @@ def test_session_writer_exports_synchronized_dataset(tmp_path: Path) -> None:
     assert (session_dir / "images/00000001.jpg").is_file()
     assert (session_dir / "trajectory.csv").is_file()
     assert (session_dir / "trajectory.png").is_file()
+    assert (session_dir / "pointcloud_map.npz").is_file()
+    assert (session_dir / "pointcloud_map.ply").is_file()
     assert archive.is_file()
 
     observation = json.loads((session_dir / "observations.jsonl").read_text().strip())
@@ -90,9 +100,12 @@ def test_session_writer_exports_synchronized_dataset(tmp_path: Path) -> None:
     assert metadata["observation_count"] == 1
     assert metadata["image_count"] == 1
     assert metadata["path_length_m"] == 5.0
+    assert metadata["pointcloud_map"]["available"] is True
+    assert metadata["pointcloud_map"]["point_count"] == 2
     assert metadata["user_metadata"] == {"room": "warehouse"}
     with zipfile.ZipFile(archive) as zipped:
         assert f"{session_dir.name}/metadata.json" in zipped.namelist()
+        assert f"{session_dir.name}/pointcloud_map.ply" in zipped.namelist()
 
 
 def test_recorder_declares_matching_dimos_inputs() -> None:
@@ -102,6 +115,7 @@ def test_recorder_declares_matching_dimos_inputs() -> None:
         ("rfid_samples", "in"),
         ("color_image", "in"),
         ("odom", "in"),
+        ("global_map", "in"),
     }
 
 
@@ -157,9 +171,16 @@ def test_module_synchronizes_latest_image_pose_and_rfid(tmp_path: Path) -> None:
                 orientation=[0.0, 0.0, 0.0, 1.0],
             )
         )
+        module._on_global_map(
+            PointCloud2.from_numpy(
+                np.asarray([[1.0, 2.0, 0.1], [2.0, 3.0, 0.2]], dtype=np.float32),
+                frame_id="world",
+                timestamp=100.15,
+            )
+        )
         module._on_rfid_sample(
             RfidTagArray(
-                tags=[RfidTag(epc="ABC", rssi_dbm=-55.0, in_range=True)],
+                tags=[RfidTag(epc="ABC", rssi_dbm=-55.0, phase="21", in_range=True)],
                 active_count=1,
                 total_count=1,
                 ts=100.2,
@@ -173,6 +194,12 @@ def test_module_synchronizes_latest_image_pose_and_rfid(tmp_path: Path) -> None:
         assert observation["robot_pose"]["timestamp"] == 100.1
         assert observation["rfid"]["timestamp"] == 100.2
         assert observation["rfid"]["tags"][0]["rssi_dbm"] == -55.0
+        assert observation["rfid"]["tags"][0]["phase"] == "21"
         assert result["trajectory_pose_count"] == 1
+        assert result["pointcloud_map"]["point_count"] == 2
+        assert result["pointcloud_map"]["update_count"] == 1
+        pointcloud = np.load(Path(result["session_dir"]) / "pointcloud_map.npz")
+        assert pointcloud["points"].shape == (2, 3)
+        assert pointcloud["frame_id"].item() == "world"
     finally:
         module.stop()
