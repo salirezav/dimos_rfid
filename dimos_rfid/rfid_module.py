@@ -75,6 +75,8 @@ class RfidModule(Module):
     _rerun_connected: bool = False
     _last_logged_active: int = -1
     _last_rerun_ts: float = 0.0
+    # Optional semantic particle-filter tracker (attached by host / future localizer).
+    _rfid_tracker: Any = None
 
     def _api_base(self) -> str:
         """Env wins over blueprint config (re-read each poll)."""
@@ -358,6 +360,42 @@ class RfidModule(Module):
             f"tags={status.get('tag_count')} "
             f"active={status.get('active_count')}"
         )
+
+    def attach_rfid_tracker(self, tracker: Any) -> None:
+        """Attach an :class:`~dimos_rfid.rfid_tracker.RFIDTracker` for agent location skills."""
+        self._rfid_tracker = tracker
+
+    @skill
+    def get_estimated_target_location(self, tag_id: str) -> str:
+        """Return the estimated 3D world location of an RFID tag (particle-filter mean).
+
+        Args:
+            tag_id: Tag EPC / identifier previously ingested by the attached tracker.
+        """
+        tracker = getattr(self, "_rfid_tracker", None)
+        if tracker is None:
+            return "RFID tracker not configured."
+        loc = tracker.get_estimated_target_location(tag_id.strip())
+        if loc is None:
+            return f"No location estimate yet for tag {tag_id!r}."
+        return f"{tag_id}: [{loc[0]:.3f}, {loc[1]:.3f}, {loc[2]:.3f}] m"
+
+    @skill
+    def get_location_confidence(self, tag_id: str) -> str:
+        """Return localization confidence in [0, 1] for an RFID tag.
+
+        Args:
+            tag_id: Tag EPC / identifier previously ingested by the attached tracker.
+        """
+        tracker = getattr(self, "_rfid_tracker", None)
+        if tracker is None:
+            return "RFID tracker not configured."
+        key = tag_id.strip()
+        known = tracker.known_tags() if hasattr(tracker, "known_tags") else []
+        if key not in known:
+            return f"No confidence estimate yet for tag {tag_id!r}."
+        conf = float(tracker.get_location_confidence(key))
+        return f"{tag_id}: confidence={conf:.3f}"
 
     @staticmethod
     def _format_tag(tag: dict[str, Any]) -> str:

@@ -103,11 +103,18 @@ self.rfid_tags.publish(array)   # → /rfid/tags#dimos_rfid.msgs.RfidTagArray
 | `rfid_module.py` | `RfidModule` + `RfidModuleConfig` — core DimOS Module |
 | `msgs.py` | `RfidTag`, `RfidTagArray` dataclasses with `to_rerun()` |
 | `_backend.py` | Locates `rfid scanner python/` and constructs `RfidScanner` for direct mode |
+| `semantic_map.py` | `SemanticOccupancyGrid3D` + Class A/B material labels |
+| `semantic_particle_filter.py` | `SemanticParticleFilter3D` + multipath LOS gate |
+| `rfid_tracker.py` | `RFIDTracker` orchestrator (per-tag particle filters) |
+| `rfid_semantic_localizer.py` | DimOS module: TF pose + RFID tags → particle filter |
+| `semantic_rfid_blueprints.py` | `unitree_go2_rfid_semantic` blueprint |
 | `demo_blueprint.py` | `rfid_demo` — RFID + Rerun only |
 | `go2_blueprints.py` | `unitree_go2_rfid` — Go2 spatial stack + RFID |
 | `go2_agentic_blueprints.py` | `unitree_go2_rfid_agentic` — adds MCP agent (separate file to avoid import-time agent deps) |
-| `__main__.py` | `python -m dimos_rfid {demo,go2,go2-agentic}` runner |
+| `__main__.py` | `python -m dimos_rfid {demo,go2,go2-agentic,semantic}` runner |
 | `integrate_with_dimos.sh` | Vendors into `dimos` package + regenerates blueprint registry |
+
+Repo root also has [`run_semantic_rfid.py`](../run_semantic_rfid.py) — one-command DimOS launcher for the semantic localizer.
 
 Project metadata and dependencies live in the repository root: `pyproject.toml` and `uv.lock`.
 
@@ -239,8 +246,13 @@ Use the dog's **Wi‑Fi / hotspot IP**, not the reader's Ethernet IP (`192.168.1
 ### Commands
 
 ```bash
-# Full Go2 + RFID (recommended)
+# Full Go2 + RFID (recommended for tag ingest only)
 uv run dimos run unitree-go2-rfid
+
+# Go2 + RFID + semantic particle-filter localization
+uv run python run_semantic_rfid.py
+# or:
+uv run python -m dimos_rfid semantic
 
 # RFID viewer only
 uv run dimos run rfid-demo
@@ -362,6 +374,103 @@ Available when the running blueprint includes `McpServer`:
 | `get_active_rfid_tags()` | Human-readable list of in-range tags with RSSI |
 | `lookup_rfid_tag(epc)` | Look up one tag by EPC hex string |
 | `get_rfid_reader_status()` | Reader connection health and tag counts |
+| `get_estimated_target_location(tag_id)` | 3D particle-filter mean (requires semantic localizer / `--agentic`) |
+| `get_location_confidence(tag_id)` | Cluster-variance confidence in `[0, 1]` |
+
+---
+
+## Semantic particle filter
+
+3D Monte Carlo localization that fuses unidirectional RSSI, robot TF pose, and a semantic occupancy map:
+
+| Material class | Behavior |
+|----------------|----------|
+| **Class A / STRUCTURAL** (walls, floor, pillars) | Particles inside/behind → weight 0; early ray hit → multipath discount |
+| **Class B / INVENTORY** (boxes, pallets) | Particles stay valid; expected RSSI attenuated per meter penetrated |
+
+### Run with DimOS (Go2)
+
+From the **repository root** (RFID HTTP server must already be running on the dog):
+
+```bash
+export ROBOT_IP=<go2-wifi-ip>
+export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
+
+# Recommended launcher
+uv run python run_semantic_rfid.py
+
+# With MCP agent skills
+uv run python run_semantic_rfid.py --agentic
+
+# Equivalent module entry point
+uv run python -m dimos_rfid semantic
+```
+
+After `./dimos_rfid/integrate_with_dimos.sh`:
+
+```bash
+uv run dimos run unitree-go2-rfid-semantic
+```
+
+### What the stack does
+
+```
+unitree_go2                      ← SLAM, TF, camera, lidar
+  + RfidModule                   ← polls RFID HTTP API → /rfid/tags
+  + RfidSemanticLocalizerModule  ← TF pose + tags → RFIDTracker particle filter
+  + RerunBridgeModule            ← visualization
+```
+
+On each in-range tag with RSSI, the localizer:
+
+1. Looks up `world ← rfid_antenna` (falls back to `base_link`)
+2. Runs a multipath LOS gate against the semantic map
+3. Updates that tag’s particle filter
+4. Periodically logs `[x, y, z]` + confidence
+
+### Environment / tuning
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RFID_PF_PARTICLES` | `5000` | Particles per tag |
+| `RFID_PF_XMIN` / `XMAX` | `-5` / `15` | Map X bounds (m) |
+| `RFID_PF_YMIN` / `YMAX` | `-5` / `15` | Map Y bounds (m) |
+| `RFID_PF_ZMIN` / `ZMAX` | `0` / `3` | Map Z bounds (m) |
+| `RFID_PF_MAP_RES` | `0.2` | Voxel resolution (m) |
+| `RFID_SEMANTIC_MAP` | _(empty)_ | Path to `.npz` map (`labels`, `origin`, `resolution`) |
+| `RFID_PF_LOG_HZ` | `0.5` | Estimate log rate (0 disables) |
+
+Without `RFID_SEMANTIC_MAP`, the module builds an empty free-space grid with a structural floor slab (tags cannot be hypothesized underground). Populate Class B inventory / Class A walls later via `set_semantic_map()` or a saved `.npz`.
+
+Save a map for reload:
+
+```python
+import numpy as np
+from dimos_rfid import SemanticOccupancyGrid3D, MaterialClass
+
+grid = SemanticOccupancyGrid3D(origin=(0, 0, 0), resolution=0.2, shape=(50, 50, 15))
+grid.set_box([4, 0, 0], [4.4, 10, 3], MaterialClass.STRUCTURAL)
+grid.set_box([2, 4, 0.2], [5, 6, 2], MaterialClass.INVENTORY)
+np.savez("warehouse.npz", labels=grid.labels, origin=grid.origin, resolution=grid.resolution)
+# then: export RFID_SEMANTIC_MAP=/path/to/warehouse.npz
+```
+
+### Unit tests (no robot)
+
+```bash
+uv run pytest tests/test_semantic_particle_filter.py -v
+```
+
+### Library API (offline / scripts)
+
+```python
+from dimos_rfid import RFIDTracker, SemanticOccupancyGrid3D, MaterialClass
+
+tracker = RFIDTracker(bounds=((-5, 15), (-5, 15), (0, 3)))
+# tracker.ingest(dog_x, dog_y, dog_z, yaw, pitch, tag_id, rssi, grid)
+# tracker.get_estimated_target_location(tag_id)
+# tracker.get_location_confidence(tag_id)
+```
 
 ### Configuration (`RfidModuleConfig`)
 
@@ -412,6 +521,9 @@ Batch message for one publish cycle. Implements `to_rerun()` → `rr.TextLog` li
 | `VULCAN_READER_USER` | `admin` | Digest auth user |
 | `VULCAN_READER_PASS` | `admin` | Digest auth password |
 | `ROBOT_IP` | — | Go2 Wi‑Fi IP (DimOS `GlobalConfig`) |
+| `RFID_PF_PARTICLES` | `5000` | Semantic PF particle count |
+| `RFID_SEMANTIC_MAP` | _(empty)_ | Optional `.npz` semantic occupancy map |
+| `RFID_PF_XMIN` … `RFID_PF_ZMAX` | see semantic section | Particle / map bounds |
 
 Reader-side variables (`RFID_WEB_PORT`, `RFID_STALE_SECONDS`, etc.) are documented in [`rfid scanner python/RFID_SCANNER.md`](../rfid%20scanner%20python/RFID_SCANNER.md).
 
@@ -439,28 +551,19 @@ uv run dimos topic echo /rfid/tags
 
 ## Extending the module
 
-### Planned: `RfidLocalizerModule`
-
-```
-rfid_tags (RfidTagArray)  ──┐
-odom (PoseStamped)        ──┼──► RfidLocalizerModule ──► tag poses in world frame
-                            │
-static TF base_link→antenna ┘
-```
-
-Fuse RSSI + robot pose to estimate tag locations; publish to Rerun and `SpatialMemory`.
-
 ### Adding to a custom blueprint
 
 ```python
 from dimos.core.coordination.blueprints import autoconnect
 from dimos.core.transport import pLCMTransport
 from dimos_rfid.rfid_module import RfidModule
+from dimos_rfid.rfid_semantic_localizer import RfidSemanticLocalizerModule
 from dimos_rfid.msgs import RfidTagArray
 
 my_blueprint = autoconnect(
     # ... your modules ...
     RfidModule.blueprint(api_base="http://10.0.0.1:8765/api/v1"),
+    RfidSemanticLocalizerModule.blueprint(n_particles=5000),
 ).transports({
     ("rfid_tags", RfidTagArray): pLCMTransport("/rfid/tags"),
 })

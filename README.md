@@ -17,6 +17,7 @@ Dimos/
 ├── README.md                    ← you are here
 ├── pyproject.toml               ← project metadata and dependencies (uv)
 ├── uv.lock                      ← locked dependency versions
+├── run_semantic_rfid.py         ← run DimOS + semantic RFID localizer
 ├── rfid scanner python/         ← runs on the robot (reader hardware access)
 │   ├── rfid_scanner_server.py   ← Flask HTTP API + web UI (port 8765)
 │   ├── rfid_service.py          ← Python RfidScanner library
@@ -25,8 +26,11 @@ Dimos/
 │   └── RFID_API.md                ← HTTP API reference
 └── dimos_rfid/                    ← DimOS integration (runs on the laptop)
     ├── rfid_module.py             ← RfidModule (DimOS Module)
+    ├── rfid_semantic_localizer.py ← semantic particle-filter localizer
+    ├── semantic_*.py / rfid_tracker.py
     ├── msgs.py                    ← RfidTag / RfidTagArray message types
     ├── go2_blueprints.py          ← unitree-go2-rfid blueprint
+    ├── semantic_rfid_blueprints.py← unitree-go2-rfid-semantic blueprint
     ├── demo_blueprint.py          ← rfid-demo blueprint (RFID + viewer only)
     ├── integrate_with_dimos.sh    ← registers blueprints with `dimos run`
     └── README.md                  ← module design & integration (detailed)
@@ -271,6 +275,24 @@ RFID tag status appears as **text logs** in the Rerun viewer (via `RfidTagArray.
 | `rfid-demo` | `RfidModule` + Rerun bridge only |
 | `unitree-go2-rfid` | Same stack as `unitree-go2` + RFID |
 | `unitree-go2-rfid-agentic` | Spatial + RFID + MCP agent (requires full DimOS agent dependencies) |
+| `unitree-go2-rfid-semantic` | Go2 + RFID + semantic particle-filter localizer |
+
+### Semantic particle-filter localization (recommended for TOI tracking)
+
+```bash
+export ROBOT_IP=<go2-wifi-ip>
+export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
+
+# One-command launcher (no integrate_with_dimos.sh required)
+uv run python run_semantic_rfid.py
+
+# Optional MCP agent skills
+uv run python run_semantic_rfid.py --agentic
+```
+
+Or after integration: `uv run dimos run unitree-go2-rfid-semantic`.
+
+Details, map format, and tuning: [`dimos_rfid/README.md`](dimos_rfid/README.md) → **Semantic particle filter**.
 
 Blueprint composition for `unitree-go2-rfid`:
 
@@ -355,8 +377,8 @@ If you need spatial memory without SAM2, compose a custom blueprint with `unitre
 
 Planned extensions (see `dimos_rfid/README.md`):
 
-1. **`RfidLocalizerModule`** — fuse RFID RSSI with robot odometry for tag localization
-2. **Rerun 3D markers** — show estimated tag positions in the world view
+1. **Live LiDAR + vision fusion** into `SemanticOccupancyGrid3D` (Class A vs Class B)
+2. **Rerun 3D markers** — show particle-filter tag estimates in the world view
 3. **`SpatialMemory` integration** — persist last-seen tag locations
 
 ---

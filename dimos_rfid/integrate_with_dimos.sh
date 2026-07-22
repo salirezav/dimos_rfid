@@ -24,12 +24,12 @@ RFID_DIR="${DIMOS_PKG}/hardware/sensors/rfid"
 echo "Vendoring RFID module into ${RFID_DIR}..."
 mkdir -p "${RFID_DIR}"
 
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py; do
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py semantic_map.py semantic_particle_filter.py rfid_tracker.py rfid_semantic_localizer.py semantic_rfid_blueprints.py; do
     cp "${SCRIPT_DIR}/${f}" "${RFID_DIR}/${f}"
 done
 
 # Blueprint stubs in dimos/ must import from dimos.hardware.sensors.rfid, not dimos_rfid.
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py rfid_module.py rfid_rerun.py; do
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py rfid_module.py rfid_rerun.py rfid_semantic_localizer.py semantic_rfid_blueprints.py semantic_map.py semantic_particle_filter.py rfid_tracker.py; do
     sed -i \
         -e "s/from dimos_rfid\./from ${RFID_PKG}./g" \
         -e "s/from dimos_rfid import/from ${RFID_PKG} import/g" \
@@ -38,6 +38,8 @@ done
 
 sed -i "s/from dimos_rfid\.go2_blueprints/from ${RFID_PKG}.go2_blueprints/g" \
     "${RFID_DIR}/go2_agentic_blueprints.py"
+sed -i "s/from dimos_rfid\.go2_blueprints/from ${RFID_PKG}.go2_blueprints/g" \
+    "${RFID_DIR}/semantic_rfid_blueprints.py"
 
 echo "Regenerating dimos blueprint registry..."
 uv run python - <<'PY'
@@ -58,7 +60,7 @@ echo ""
 echo "Verifying imports..."
 uv run python - <<PY
 from dimos.robot.get_all_blueprints import get_blueprint_by_name
-for name in ("rfid-demo", "unitree-go2-rfid"):
+for name in ("rfid-demo", "unitree-go2-rfid", "unitree-go2-rfid-semantic"):
     get_blueprint_by_name(name)
     print(f"  {name}: OK")
 PY
@@ -68,7 +70,8 @@ echo "Registered RFID blueprints:"
 uv run dimos list | grep -i rfid || true
 
 echo ""
-echo "Done. Example:"
+echo "Done. Examples:"
 echo "  export ROBOT_IP=<go2-wifi-ip>"
 echo "  export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1"
-echo "  uv run dimos run unitree-go2-rfid"
+echo "  uv run python run_semantic_rfid.py"
+echo "  uv run dimos run unitree-go2-rfid-semantic"
