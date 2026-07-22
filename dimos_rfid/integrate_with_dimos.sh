@@ -24,12 +24,12 @@ RFID_DIR="${DIMOS_PKG}/hardware/sensors/rfid"
 echo "Vendoring RFID module into ${RFID_DIR}..."
 mkdir -p "${RFID_DIR}"
 
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py semantic_map.py semantic_particle_filter.py rfid_tracker.py rfid_semantic_localizer.py semantic_rfid_blueprints.py; do
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py semantic_map.py semantic_particle_filter.py rfid_tracker.py rfid_semantic_localizer.py semantic_rfid_blueprints.py focus_filter.py rfid_focus.txt; do
     cp "${SCRIPT_DIR}/${f}" "${RFID_DIR}/${f}"
 done
 
 # Blueprint stubs in dimos/ must import from dimos.hardware.sensors.rfid, not dimos_rfid.
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py rfid_module.py rfid_rerun.py rfid_semantic_localizer.py semantic_rfid_blueprints.py semantic_map.py semantic_particle_filter.py rfid_tracker.py; do
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py rfid_module.py rfid_rerun.py rfid_semantic_localizer.py semantic_rfid_blueprints.py semantic_map.py semantic_particle_filter.py rfid_tracker.py focus_filter.py; do
     sed -i \
         -e "s/from dimos_rfid\./from ${RFID_PKG}./g" \
         -e "s/from dimos_rfid import/from ${RFID_PKG} import/g" \

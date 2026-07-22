@@ -2,6 +2,10 @@
 
 Subscribes to ``rfid_tags``, reads robot pose from TF, and updates an
 :class:`~dimos_rfid.rfid_tracker.RFIDTracker` against a semantic occupancy map.
+
+Tag-of-interest selection uses the same ``rfid_focus.txt`` pattern as the
+experimental RFID module: put an EPC (or suffix) in the file to localize only
+that tag.
 """
 
 from __future__ import annotations
@@ -9,6 +13,7 @@ from __future__ import annotations
 import math
 import os
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -20,11 +25,14 @@ from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In
 from dimos.utils.logging_config import setup_logger
 
+from dimos_rfid.focus_filter import FocusFilter, ensure_focus_file
 from dimos_rfid.msgs import RfidTagArray
 from dimos_rfid.rfid_tracker import RFIDTracker
 from dimos_rfid.semantic_map import MaterialClass, SemanticOccupancyGrid3D
 
 logger = setup_logger()
+
+DEFAULT_FOCUS_FILE = str(Path(__file__).resolve().parent / "rfid_focus.txt")
 
 
 def _yaw_pitch_from_matrix(rot: np.ndarray) -> tuple[float, float]:
@@ -61,16 +69,38 @@ class RfidSemanticLocalizerConfig(ModuleConfig):
         ge=0.0,
         description="How often to log location estimates (0 disables).",
     )
+    focus_file: str = Field(
+        default="",
+        description="Path to rfid_focus.txt (one EPC/suffix per line). "
+        "Empty uses dimos_rfid/rfid_focus.txt beside this module.",
+    )
+    focus_epcs: list[str] = Field(
+        default_factory=list,
+        description="Extra EPC/suffix patterns to focus (merged with focus_file).",
+    )
 
 
 class RfidSemanticLocalizerModule(Module):
-    """Fuse RFID RSSI + TF pose + semantic map via a 3D particle filter."""
+    """Fuse RFID RSSI + TF pose + semantic map via a 3D particle filter.
+
+    **Inputs (automatic when running DimOS):**
+      - ``rfid_tags`` stream (from ``RfidModule``)
+      - TF ``world ← rfid_antenna`` (or ``base_link``)
+      - semantic occupancy map (blank floor by default, or ``RFID_SEMANTIC_MAP``)
+      - TOI filter via ``rfid_focus.txt``
+
+    **Outputs:**
+      - log lines: ``TOI … @ [x, y, z] m  conf=…``
+      - agent skills: ``get_estimated_target_location``, ``get_location_confidence``
+      - Python API on the attached ``RFIDTracker``
+    """
 
     config: RfidSemanticLocalizerConfig
     rfid_tags: In[RfidTagArray]
 
     _tracker: RFIDTracker | None = None
     _semantic_map: SemanticOccupancyGrid3D | None = None
+    _focus: FocusFilter | None = None
     _last_log_ts: float = 0.0
 
     @rpc
@@ -80,6 +110,24 @@ class RfidSemanticLocalizerModule(Module):
             self.tf.start()
         except Exception as exc:  # noqa: BLE001
             logger.warning("TF start failed (will retry on lookups): %s", exc)
+
+        focus_path = (
+            self.config.focus_file
+            or os.environ.get("RFID_FOCUS_FILE", "")
+            or DEFAULT_FOCUS_FILE
+        )
+        ensure_focus_file(focus_path)
+        self._focus = FocusFilter(
+            config_patterns=list(self.config.focus_epcs),
+            focus_file=focus_path,
+        )
+        if self._focus.active:
+            logger.info("RFID focus filter active: %s", self._focus.patterns())
+        else:
+            logger.info(
+                "RFID focus: localizing ALL tags. Edit %s (one EPC/suffix per line) to focus.",
+                focus_path,
+            )
 
         self._semantic_map = self._build_map()
         bounds = (
@@ -116,7 +164,6 @@ class RfidSemanticLocalizerModule(Module):
             max(1, int(math.ceil((self.config.zmax - self.config.zmin) / res))),
         )
         grid = SemanticOccupancyGrid3D(origin=origin, resolution=res, shape=shape)
-        # Default floor as Class A so tags cannot be hypothesized underground.
         grid.set_box(
             (self.config.xmin, self.config.ymin, self.config.zmin),
             (self.config.xmax, self.config.ymax, self.config.zmin + res),
@@ -165,6 +212,8 @@ class RfidSemanticLocalizerModule(Module):
         for tag in msg.active_tags():
             if tag.rssi_dbm is None or not tag.epc:
                 continue
+            if self._focus is not None and not self._focus.matches(tag.epc):
+                continue
             self._tracker.ingest(
                 float(dog_pos[0]),
                 float(dog_pos[1]),
@@ -185,6 +234,8 @@ class RfidSemanticLocalizerModule(Module):
     def _log_estimates(self) -> None:
         assert self._tracker is not None
         for tag_id in self._tracker.known_tags():
+            if self._focus is not None and not self._focus.matches(tag_id):
+                continue
             loc = self._tracker.get_estimated_target_location(tag_id)
             conf = self._tracker.get_location_confidence(tag_id)
             if loc is None:
@@ -208,6 +259,19 @@ class RfidSemanticLocalizerModule(Module):
     def set_semantic_map(self, semantic_map: SemanticOccupancyGrid3D) -> None:
         """Replace the live semantic map (e.g. after LiDAR+vision fusion)."""
         self._semantic_map = semantic_map
+
+    @rpc
+    def set_focus(self, epcs: list[str] | None = None) -> dict[str, Any]:
+        """Set focus patterns at runtime.
+
+        - ``set_focus(["8f"])`` — localize only matching tags
+        - ``set_focus([])`` — localize all (ignore focus file until changed)
+        - ``set_focus(None)`` — drop RPC override; use focus file again
+        """
+        assert self._focus is not None
+        self._focus.set_rpc_focus(epcs)
+        pats = self._focus.patterns()
+        return {"focus": pats, "active": bool(pats)}
 
     @skill
     def get_estimated_target_location(self, tag_id: str) -> str:
@@ -252,10 +316,11 @@ class RfidSemanticLocalizerModule(Module):
             return matches[0]
         if not matches:
             return None
-        return matches[0]  # ambiguous → first match
+        return matches[0]
 
     @rpc
     def stop(self) -> None:
         self._tracker = None
         self._semantic_map = None
+        self._focus = None
         super().stop()

@@ -381,12 +381,76 @@ Available when the running blueprint includes `McpServer`:
 
 ## Semantic particle filter
 
-3D Monte Carlo localization that fuses unidirectional RSSI, robot TF pose, and a semantic occupancy map:
+3D Monte Carlo localization that fuses unidirectional RSSI, robot TF pose, and a semantic occupancy map.
 
 | Material class | Behavior |
 |----------------|----------|
 | **Class A / STRUCTURAL** (walls, floor, pillars) | Particles inside/behind → weight 0; early ray hit → multipath discount |
 | **Class B / INVENTORY** (boxes, pallets) | Particles stay valid; expected RSSI attenuated per meter penetrated |
+
+### How to work with it (quick)
+
+1. Start the RFID HTTP server on the Go2.
+2. Put your tag-of-interest in [`rfid_focus.txt`](rfid_focus.txt) (same idea as the experimental module):
+
+   ```text
+   # one EPC or short suffix per line
+   8f
+   ```
+
+   Empty file = localize **all** in-range tags. Edit while running; next poll picks it up.
+3. Run DimOS with the semantic stack:
+
+   ```bash
+   export ROBOT_IP=<go2-wifi-ip>
+   export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
+   uv run python run_semantic_rfid.py
+   ```
+4. Walk the dog so it sees the tag from several poses/angles. Watch logs for:
+
+   ```text
+   TOI …8f @ [x, y, z] m  conf=0.72
+   ```
+5. Query the estimate (agentic mode) or from code:
+
+   ```bash
+   uv run python run_semantic_rfid.py --agentic
+   # then: get_estimated_target_location("8f")
+   #       get_location_confidence("8f")
+   ```
+
+### Inputs / outputs
+
+```
+                    ┌──────────────────────────────────────┐
+  RFID HTTP API ──► │ RfidModule                           │
+                    │   Out: rfid_tags  (/rfid/tags)       │
+                    └──────────────────┬───────────────────┘
+                                       │  In: rfid_tags
+  TF world←antenna ───────────────────►│
+  rfid_focus.txt (TOI filter) ────────►│ RfidSemanticLocalizerModule
+  semantic map (.npz / blank) ────►│
+                    └──────────────────┬───────────────────┘
+                                       │
+                    Outputs:           ▼
+                      • logs: TOI @ [x,y,z] + confidence
+                      • skills: get_estimated_target_location(tag_id)
+                                get_location_confidence(tag_id)
+                      • Python: tracker.get_estimated_target_location(tag_id)
+                                tracker.get_location_confidence(tag_id)
+```
+
+| Kind | Name | What it is |
+|------|------|------------|
+| **Input** | `rfid_tags` | Live tag list from `RfidModule` (EPC + RSSI) |
+| **Input** | TF pose | Dog/antenna position + yaw/pitch in `world` |
+| **Input** | `rfid_focus.txt` | Which EPC(s) to treat as TOI (empty = all) |
+| **Input** | Semantic map | Class A/B voxels (optional `.npz`; default = free space + floor) |
+| **Output** | Log line | Estimated `[x,y,z]` + confidence for focused tags |
+| **Output** | Agent skills | Human-readable location / confidence strings |
+| **Output** | `RFIDTracker` API | `np.ndarray` location + `float` confidence |
+
+Unlike the experimental `rfid_module/` multilateration UI, this module does **not** draw Rerun 3D markers yet — primary outputs are logs + query APIs.
 
 ### Run with DimOS (Go2)
 
@@ -418,20 +482,33 @@ uv run dimos run unitree-go2-rfid-semantic
 unitree_go2                      ← SLAM, TF, camera, lidar
   + RfidModule                   ← polls RFID HTTP API → /rfid/tags
   + RfidSemanticLocalizerModule  ← TF pose + tags → RFIDTracker particle filter
-  + RerunBridgeModule            ← visualization
+  + RerunBridgeModule            ← visualization (tag list panel)
 ```
 
-On each in-range tag with RSSI, the localizer:
+On each focused in-range tag with RSSI, the localizer:
 
 1. Looks up `world ← rfid_antenna` (falls back to `base_link`)
 2. Runs a multipath LOS gate against the semantic map
 3. Updates that tag’s particle filter
 4. Periodically logs `[x, y, z]` + confidence
 
+### Focus file (TOI selection)
+
+File: [`rfid_focus.txt`](rfid_focus.txt) (or `$RFID_FOCUS_FILE`).
+
+| File contents | Behavior |
+|---------------|----------|
+| Empty / comments only | Localize **all** in-range tags |
+| `8f` | Only EPCs containing `8f` (usually the suffix) |
+| Full EPC hex | Only that exact tag |
+
+You can also call RPC `set_focus(["8f"])` at runtime.
+
 ### Environment / tuning
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `RFID_FOCUS_FILE` | `dimos_rfid/rfid_focus.txt` | TOI focus list path |
 | `RFID_PF_PARTICLES` | `5000` | Particles per tag |
 | `RFID_PF_XMIN` / `XMAX` | `-5` / `15` | Map X bounds (m) |
 | `RFID_PF_YMIN` / `YMAX` | `-5` / `15` | Map Y bounds (m) |
@@ -471,6 +548,8 @@ tracker = RFIDTracker(bounds=((-5, 15), (-5, 15), (0, 3)))
 # tracker.get_estimated_target_location(tag_id)
 # tracker.get_location_confidence(tag_id)
 ```
+
+---
 
 ### Configuration (`RfidModuleConfig`)
 

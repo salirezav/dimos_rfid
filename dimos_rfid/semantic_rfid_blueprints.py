@@ -27,6 +27,7 @@ def _localizer_blueprint():
         map_resolution=float(os.environ.get("RFID_PF_MAP_RES", "0.2")),
         map_npz_path=os.environ.get("RFID_SEMANTIC_MAP", ""),
         log_estimates_hz=float(os.environ.get("RFID_PF_LOG_HZ", "0.5")),
+        focus_file=os.environ.get("RFID_FOCUS_FILE", ""),
     )
 
 
