@@ -67,6 +67,9 @@ class RfidModule(Module):
 
     config: RfidModuleConfig
     rfid_tags: Out[RfidTagArray]
+    # Full-rate stream for dataset collection and algorithms that need RSSI
+    # changes. Unlike ``rfid_tags``, this publishes every reader event/poll.
+    rfid_samples: Out[RfidTagArray]
 
     _scanner: Any = None
     _latest: RfidTagArray | None = None
@@ -244,6 +247,7 @@ class RfidModule(Module):
 
     def _publish_tags(self, array: RfidTagArray, *, force: bool = False) -> None:
         self._latest = array
+        self.rfid_samples.publish(array)
         if not force and not self._should_publish(array):
             self._maybe_refresh_rerun(array)
             return

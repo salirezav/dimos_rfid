@@ -5,6 +5,7 @@
 Examples:
     python -m dimos_rfid demo
     python -m dimos_rfid go2
+    python -m dimos_rfid go2-dataset
     python -m dimos_rfid go2-agentic
 """
 
@@ -18,7 +19,7 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run DimOS RFID blueprints")
     parser.add_argument(
         "blueprint",
-        choices=["demo", "go2", "go2-agentic"],
+        choices=["demo", "go2", "go2-dataset", "go2-agentic"],
         help="Which blueprint to run",
     )
     args = parser.parse_args(argv)
@@ -29,10 +30,15 @@ def main(argv: list[str] | None = None) -> None:
         from dimos_rfid.demo_blueprint import rfid_demo
 
         blueprint = rfid_demo
-    elif args.blueprint == "go2":
+    elif args.blueprint in {"go2", "go2-dataset"}:
         from dimos_rfid.go2_blueprints import unitree_go2_rfid
 
-        blueprint = unitree_go2_rfid
+        if args.blueprint == "go2-dataset":
+            from dimos_rfid.go2_blueprints import unitree_go2_rfid_dataset
+
+            blueprint = unitree_go2_rfid_dataset
+        else:
+            blueprint = unitree_go2_rfid
     else:
         from dimos_rfid.go2_agentic_blueprints import unitree_go2_rfid_agentic
 

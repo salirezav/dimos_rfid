@@ -13,6 +13,7 @@ DimOS integration for the **Vulcan RFID Titanium** UHF reader on a Unitree Go2. 
 - [Installation](#installation)
 - [DimOS integration](#dimos-integration)
 - [Running](#running)
+- [Offline dataset collection](#offline-dataset-collection)
 - [Connection modes](#connection-modes)
 - [Blueprints](#blueprints)
 - [Module API](#module-api)
@@ -72,10 +73,11 @@ DimOS blueprints are discovered from Python files inside the `dimos` package tre
 1. **`start()`** — reads `RFID_CONNECTION_MODE` (`http` or `direct`).
 2. **HTTP mode (default)** — starts a reactive poll loop at `poll_hz` (default 2 Hz). Each tick `GET`s `{RFID_API_BASE}/tags` (or equivalent endpoint via `rfid_service.to_api_payload()` shape).
 3. **Direct mode** — imports `rfid_service.RfidScanner` in-process, connects to the reader IP, registers an `on_tag` callback for live events.
-4. **`rfid_tags.publish()`** — emits `RfidTagArray` on the module's `Out` stream.
-5. **LCM transport** — blueprint maps `rfid_tags` → `/rfid/tags` so any DimOS module or `dimos topic echo` can subscribe.
-6. **`to_rerun()`** — `RfidTagArray` implements Rerun conversion; `RerunBridgeModule` renders tag status as text logs in the 3D viewer.
-7. **Agent skills** — `@skill` methods (`get_active_rfid_tags`, etc.) are exposed when the blueprint includes `McpServer` (agentic variant).
+4. **`rfid_samples.publish()`** — emits every reader sample, including RSSI-only changes, for datasets and algorithms.
+5. **`rfid_tags.publish()`** — emits status changes for lightweight UI consumers.
+6. **LCM transport** — blueprints map the streams to `/rfid/samples` and `/rfid/tags`.
+7. **`to_rerun()`** — `RfidTagArray` implements Rerun conversion; `RerunBridgeModule` renders tag status as text logs in the 3D viewer.
+8. **Agent skills** — `@skill` methods (`get_active_rfid_tags`, etc.) are exposed when the blueprint includes `McpServer` (agentic variant).
 
 ### Static transform
 
@@ -91,7 +93,8 @@ DimOS blueprints are discovered from Python files inside the `dimos` package tre
 array = RfidTagArray.from_api_payload(payload)
 
 # Published to LCM
-self.rfid_tags.publish(array)   # → /rfid/tags#dimos_rfid.msgs.RfidTagArray
+self.rfid_samples.publish(array)  # every poll/event → /rfid/samples
+self.rfid_tags.publish(array)     # membership/status changes → /rfid/tags
 ```
 
 ---
@@ -101,12 +104,13 @@ self.rfid_tags.publish(array)   # → /rfid/tags#dimos_rfid.msgs.RfidTagArray
 | File | Purpose |
 |------|---------|
 | `rfid_module.py` | `RfidModule` + `RfidModuleConfig` — core DimOS Module |
+| `recorder.py` | Synchronized RFID + image + pose + trajectory data recorder |
 | `msgs.py` | `RfidTag`, `RfidTagArray` dataclasses with `to_rerun()` |
 | `_backend.py` | Locates `rfid scanner python/` and constructs `RfidScanner` for direct mode |
 | `demo_blueprint.py` | `rfid_demo` — RFID + Rerun only |
-| `go2_blueprints.py` | `unitree_go2_rfid` — Go2 spatial stack + RFID |
+| `go2_blueprints.py` | Live `unitree_go2_rfid` and collecting `unitree_go2_rfid_dataset` stacks |
 | `go2_agentic_blueprints.py` | `unitree_go2_rfid_agentic` — adds MCP agent (separate file to avoid import-time agent deps) |
-| `__main__.py` | `python -m dimos_rfid {demo,go2,go2-agentic}` runner |
+| `__main__.py` | `python -m dimos_rfid {demo,go2,go2-dataset,go2-agentic}` runner |
 | `integrate_with_dimos.sh` | Vendors into `dimos` package + regenerates blueprint registry |
 
 Project metadata and dependencies live in the repository root: `pyproject.toml` and `uv.lock`.
@@ -252,6 +256,46 @@ uv run dimos --viewer rerun-web run unitree-go2-rfid
 uv run python -m dimos_rfid go2
 ```
 
+## Offline dataset collection
+
+Run the dedicated collection blueprint on the laptop:
+
+```bash
+export ROBOT_IP=<go2-wifi-ip>
+export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
+uv run python -m dimos_rfid go2-dataset
+```
+
+Recording begins automatically. Walk the dog through the desired trajectory,
+then press `Ctrl+C`. Normal DimOS shutdown finalizes the session and creates a
+ZIP in:
+
+```text
+~/Downloads/dimos_rfid_datasets/
+```
+
+Set `RFID_DATASET_DIR` to choose another laptop folder and
+`RFID_DATASET_SESSION` to give the run a stable name. Set
+`RFID_DATASET_AUTO_START=0` when composing the recorder into an interactive
+stack and call its `start_recording()` / `stop_recording()` RPCs instead.
+
+Each session contains:
+
+```text
+<session>/
+├── metadata.json
+├── observations.jsonl       # synchronized RFID, RSSI, image path, and robot pose
+├── images/                  # one JPEG per RFID sample
+├── trajectory.json          # complete machine-readable walked path
+├── trajectory.csv
+└── trajectory.png           # top-down path preview
+<session>.zip                # portable copy of the complete session
+```
+
+The module records the latest camera frame and pose when each full-rate
+`/rfid/samples` message arrives. Timestamps and image/pose ages remain in every
+observation so synchronization quality can be filtered during training.
+
 ### Verify
 
 ```bash
@@ -394,10 +438,14 @@ Single tag observation:
 | `in_range` | `bool` | Seen within `stale_seconds` |
 | `last_seen` | `float` | Unix timestamp |
 | `name` | `str` | Short display label |
+| `first_seen` | `float` | First reader observation timestamp |
+| `phase` | `str \| None` | RF phase reported by the reader |
+| `device_id` | `str` | Reader device that produced the observation |
 
 ### `RfidTagArray`
 
 Batch message for one publish cycle. Implements `to_rerun()` → `rr.TextLog` listing in-range tags for the Rerun bridge.
+Its `ts` field records when the reader event or HTTP snapshot was received.
 
 ---
 
@@ -407,6 +455,9 @@ Batch message for one publish cycle. Implements `to_rerun()` → `rr.TextLog` li
 |----------|---------|-------------|
 | `RFID_API_BASE` | `http://localhost:8765/api/v1` | HTTP API base URL |
 | `RFID_CONNECTION_MODE` | `http` | `http` or `direct` |
+| `RFID_DATASET_DIR` | `~/Downloads/dimos_rfid_datasets` | Laptop destination for sessions and ZIP archives |
+| `RFID_DATASET_SESSION` | UTC timestamp | Optional collection run name |
+| `RFID_DATASET_AUTO_START` | Blueprint default | Override automatic collection (`1`/`0`) |
 | `RFID_SCANNER_PYTHON_DIR` | (auto-detect) | Path to `rfid scanner python/` for direct mode |
 | `VULCAN_READER_HOST` | `192.168.123.2` | Reader IP (direct mode) |
 | `VULCAN_READER_USER` | `admin` | Digest auth user |

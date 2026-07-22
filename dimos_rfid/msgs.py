@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import time
 from typing import Any
 
 import rerun as rr
@@ -22,6 +23,9 @@ class RfidTag:
     in_range: bool = False
     last_seen: float = 0.0
     name: str = ""
+    first_seen: float = 0.0
+    phase: str | None = None
+    device_id: str = ""
 
     @classmethod
     def from_api_dict(cls, data: dict[str, Any]) -> RfidTag:
@@ -34,6 +38,9 @@ class RfidTag:
             in_range=bool(data.get("in_range", False)),
             last_seen=float(data.get("last_seen", 0.0)),
             name=str(data.get("name", "")),
+            first_seen=float(data.get("first_seen", 0.0)),
+            phase=str(data["phase"]) if data.get("phase") is not None else None,
+            device_id=str(data.get("device_id", "")),
         )
 
 
@@ -46,6 +53,15 @@ class RfidTagArray:
     active_count: int = 0
     total_count: int = 0
     connection_status: str = ""
+    # Capture time of this reader event/poll. Kept last for positional backward
+    # compatibility with the original message constructor.
+    ts: float = field(default_factory=time.time)
+    reader_host: str = ""
+    reader_device_id: str = ""
+    reader_started: bool | None = None
+    stale_seconds: float | None = None
+    source_updated_at: str = ""
+    scanner_status: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_api_payload(cls, payload: dict[str, Any], *, frame_id: str = "rfid_antenna") -> RfidTagArray:
@@ -56,6 +72,16 @@ class RfidTagArray:
             frame_id=frame_id,
             active_count=active,
             total_count=len(tags),
+            reader_host=str(payload.get("reader_host", "")),
+            reader_device_id=str(payload.get("device_id", "")),
+            reader_started=payload.get("reader_started"),
+            stale_seconds=(
+                float(payload["stale_seconds"])
+                if payload.get("stale_seconds") is not None
+                else None
+            ),
+            source_updated_at=str(payload.get("updated_at", "")),
+            scanner_status=dict(payload.get("scanner") or {}),
         )
 
     @classmethod

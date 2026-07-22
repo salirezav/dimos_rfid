@@ -24,12 +24,12 @@ RFID_DIR="${DIMOS_PKG}/hardware/sensors/rfid"
 echo "Vendoring RFID module into ${RFID_DIR}..."
 mkdir -p "${RFID_DIR}"
 
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py; do
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py recorder.py msgs.py rfid_module.py rfid_rerun.py _backend.py; do
     cp "${SCRIPT_DIR}/${f}" "${RFID_DIR}/${f}"
 done
 
 # Blueprint stubs in dimos/ must import from dimos.hardware.sensors.rfid, not dimos_rfid.
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py rfid_module.py rfid_rerun.py; do
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py recorder.py rfid_module.py rfid_rerun.py; do
     sed -i \
         -e "s/from dimos_rfid\./from ${RFID_PKG}./g" \
         -e "s/from dimos_rfid import/from ${RFID_PKG} import/g" \
@@ -58,7 +58,7 @@ echo ""
 echo "Verifying imports..."
 uv run python - <<PY
 from dimos.robot.get_all_blueprints import get_blueprint_by_name
-for name in ("rfid-demo", "unitree-go2-rfid"):
+for name in ("rfid-demo", "unitree-go2-rfid", "unitree-go2-rfid-dataset"):
     get_blueprint_by_name(name)
     print(f"  {name}: OK")
 PY

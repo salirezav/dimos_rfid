@@ -25,6 +25,7 @@ Dimos/
 │   └── RFID_API.md                ← HTTP API reference
 └── dimos_rfid/                    ← DimOS integration (runs on the laptop)
     ├── rfid_module.py             ← RfidModule (DimOS Module)
+    ├── recorder.py                ← synchronized offline data recorder
     ├── msgs.py                    ← RfidTag / RfidTagArray message types
     ├── go2_blueprints.py          ← unitree-go2-rfid blueprint
     ├── demo_blueprint.py          ← rfid-demo blueprint (RFID + viewer only)
@@ -221,6 +222,17 @@ uv run dimos run rfid-demo
 ```bash
 uv run python -m dimos_rfid go2
 ```
+
+**Collect an offline RFID + image + robot-pose dataset:**
+
+```bash
+uv run python -m dimos_rfid go2-dataset
+```
+
+Walk the dog, then press `Ctrl+C`. The session directory and portable ZIP are
+finalized under `~/Downloads/dimos_rfid_datasets/`. Set `RFID_DATASET_DIR` to
+choose a different folder. See [`dimos_rfid/README.md`](dimos_rfid/README.md#offline-dataset-collection)
+for the file schema and recorder controls.
 
 ### 7. Verify RFID data
 
