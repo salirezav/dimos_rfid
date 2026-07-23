@@ -12,13 +12,13 @@ Optional flags:
     uv run python run_semantic_rfid.py --agentic   # also start MCP agent skills
     uv run python run_semantic_rfid.py --help
 
-See dimos_rfid/README.md → “Semantic particle filter”.
+See SEMANTIC_LOCALIZER.md for how to run, query estimates, and set up MCP/agent.
 
 Workflow:
   1. Edit dimos_rfid/rfid_focus.txt with your tag EPC/suffix (empty = all tags)
   2. export ROBOT_IP and RFID_API_BASE
   3. uv run python run_semantic_rfid.py
-  4. Read TOI [x,y,z] from logs or agent skills
+  4. Read TOI [x,y,z] from logs (or dimos mcp call … with --agentic)
 """
 
 from __future__ import annotations

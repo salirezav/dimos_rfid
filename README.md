@@ -18,6 +18,7 @@ Dimos/
 ├── pyproject.toml               ← project metadata and dependencies (uv)
 ├── uv.lock                      ← locked dependency versions
 ├── run_semantic_rfid.py         ← run DimOS + semantic RFID localizer
+├── SEMANTIC_LOCALIZER.md        ← how to use / query the semantic localizer
 ├── rfid scanner python/         ← runs on the robot (reader hardware access)
 │   ├── rfid_scanner_server.py   ← Flask HTTP API + web UI (port 8765)
 │   ├── rfid_service.py          ← Python RfidScanner library
@@ -279,26 +280,16 @@ RFID tag status appears as **text logs** in the Rerun viewer (via `RfidTagArray.
 
 ### Semantic particle-filter localization (recommended for TOI tracking)
 
-Same focus-file workflow as the experimental module: put an EPC/suffix in
-[`dimos_rfid/rfid_focus.txt`](dimos_rfid/rfid_focus.txt), then run:
+**Full how-to (focus file, I/O, MCP queries, agentic setup):**
+[`SEMANTIC_LOCALIZER.md`](SEMANTIC_LOCALIZER.md)
 
 ```bash
+# Put TOI in dimos_rfid/rfid_focus.txt, then:
 export ROBOT_IP=<go2-wifi-ip>
 export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
-
-# One-command launcher (no integrate_with_dimos.sh required)
 uv run python run_semantic_rfid.py
-
-# Optional MCP agent skills
-uv run python run_semantic_rfid.py --agentic
+# Estimates appear in logs: TOI … @ [x,y,z] m  conf=…
 ```
-
-**Inputs:** RFID tags (EPC+RSSI), robot TF pose, `rfid_focus.txt` (TOI), optional semantic map.  
-**Outputs:** log lines `TOI @ [x,y,z] + conf`, plus skills `get_estimated_target_location` / `get_location_confidence`.
-
-Full I/O diagram and tuning: [`dimos_rfid/README.md`](dimos_rfid/README.md) → **Semantic particle filter**.
-
-Or after integration: `uv run dimos run unitree-go2-rfid-semantic`.
 
 Blueprint composition for `unitree-go2-rfid`:
 
@@ -391,6 +382,7 @@ Planned extensions (see `dimos_rfid/README.md`):
 
 ## Further reading
 
+- [`SEMANTIC_LOCALIZER.md`](SEMANTIC_LOCALIZER.md) — semantic particle filter: how to run, query, and set up MCP/agent
 - [`dimos_rfid/README.md`](dimos_rfid/README.md) — module internals, integration options, API reference
 - [`rfid scanner python/RFID_SCANNER.md`](rfid%20scanner%20python/RFID_SCANNER.md) — reader hardware & server setup
 - [`rfid scanner python/RFID_API.md`](rfid%20scanner%20python/RFID_API.md) — HTTP API endpoints
