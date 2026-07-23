@@ -29,13 +29,10 @@ Focus file: [`dimos_rfid/rfid_focus.txt`](dimos_rfid/rfid_focus.txt)
    uv run python run_semantic_rfid.py
    ```
 
-4. Walk the dog so it sees the tag from several poses. Watch logs:
-
-   ```text
-   TOI …8f @ [1.23, 4.56, 0.80] m  conf=0.72
-   ```
-
-That log line **is** the location estimate. You do not need an agent for basic use.
+4. Walk the dog so it sees the tag from several poses. Watch:
+   - **Logs:** `TOI …8f @ [1.23, 4.56, 0.80] m  conf=0.72`
+   - **Rerun Camera view:** 2D dot + label when the tag is in frame
+   - **Rerun 3D view:** colored point at the estimated world position
 
 ---
 
@@ -65,10 +62,12 @@ That log line **is** the location estimate. You do not need an agent for basic u
 | **Input** | `rfid_focus.txt` | Which EPC(s) to localize (empty = all) |
 | **Input** | Semantic map | Class A/B voxels (optional; default = free space + floor) |
 | **Output** | Log line | Estimated `[x,y,z]` + confidence |
+| **Output** | Rerun markers | 3D point in the world/LiDAR view + 2D overlay on the camera (when the tag is in frame) |
 | **Output** | MCP skills | Queryable location / confidence strings |
 
-This module does **not** draw Rerun 3D markers yet (unlike the experimental
-`rfid_module/` multilateration UI). Primary outputs are **logs** and optional **MCP queries**.
+Markers appear under `world/rfid/markers` (3D) and `world/color_image/rfid/…` (camera).
+Gray → blue → green as confidence rises. Camera overlay only shows when the
+estimate projects inside the live image (dog looking toward the tag).
 
 ### Material classes (semantic map)
 
