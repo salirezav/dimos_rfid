@@ -3,22 +3,10 @@
 
 Usage (from the repository root):
 
-    export ROBOT_IP=<go2-wifi-ip>
-    export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
-    uv run python run_semantic_rfid.py
-
-Optional flags:
-
-    uv run python run_semantic_rfid.py --agentic   # also start MCP agent skills
-    uv run python run_semantic_rfid.py --help
+    cp .env.example .env          # then edit GOOGLE_API_KEY / ROBOT_IP
+    uv run python run_semantic_rfid.py --agentic
 
 See SEMANTIC_LOCALIZER.md for how to run, query estimates, and set up MCP/agent.
-
-Workflow:
-  1. Edit dimos_rfid/rfid_focus.txt with your tag EPC/suffix (empty = all tags)
-  2. export ROBOT_IP and RFID_API_BASE
-  3. uv run python run_semantic_rfid.py
-  4. Read TOI [x,y,z] from logs (or dimos mcp call … with --agentic)
 """
 
 from __future__ import annotations
@@ -26,9 +14,43 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
+
+
+def _load_dotenv() -> None:
+    """Load repo-root ``.env`` into os.environ (does not override existing vars)."""
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.is_file():
+        return
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        # Minimal fallback parser if python-dotenv is not installed.
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            val = val.strip().strip("'").strip('"')
+            if key and key not in os.environ:
+                os.environ[key] = val
+        return
+    load_dotenv(env_path, override=False)
+
+
+def _resolve_agent_model(cli_model: str | None) -> str:
+    """Pick LLM id for McpClient; prefer Gemini for this project."""
+    model = (cli_model or os.environ.get("RFID_AGENT_MODEL", "")).strip()
+    if not model:
+        # Default agentic stack to Gemini (not OpenAI).
+        model = "google_genai:gemini-2.0-flash"
+    return model
 
 
 def main(argv: list[str] | None = None) -> int:
+    _load_dotenv()
+
     parser = argparse.ArgumentParser(
         description="Run DimOS with RFID semantic particle-filter localization",
     )
@@ -49,9 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "LLM for McpClient when using --agentic. "
-            "Examples: gpt-4o (default, needs OPENAI_API_KEY), "
-            "google_genai:gemini-2.0-flash (needs GOOGLE_API_KEY), "
-            "ollama:qwen3:8b (local Ollama)."
+            "Default: google_genai:gemini-2.0-flash (needs GOOGLE_API_KEY). "
+            "Also: gpt-4o (OPENAI_API_KEY), ollama:qwen3:8b."
         ),
     )
     args = parser.parse_args(argv)
@@ -59,19 +80,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.particles is not None:
         os.environ["RFID_PF_PARTICLES"] = str(args.particles)
 
-    # Fail fast with a clear message if robot/API env is missing.
     robot_ip = os.environ.get("ROBOT_IP", "").strip()
     api_base = os.environ.get("RFID_API_BASE", "").strip()
     if not robot_ip:
         print(
             "Warning: ROBOT_IP is not set. Go2 WebRTC connection will likely fail.\n"
-            "  export ROBOT_IP=<go2-wifi-ip>",
+            "  Put it in .env or: export ROBOT_IP=<go2-wifi-ip>",
             file=sys.stderr,
         )
     if not api_base:
         print(
             "Warning: RFID_API_BASE is not set. Defaulting to localhost.\n"
-            "  export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1",
+            "  Put it in .env or: export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1",
             file=sys.stderr,
         )
 
@@ -85,33 +105,30 @@ def main(argv: list[str] | None = None) -> int:
         from dimos_rfid.agentic_skills import rfid_agentic_skills
         from dimos_rfid.semantic_rfid_blueprints import unitree_go2_rfid_semantic
 
-        model = (args.model or os.environ.get("RFID_AGENT_MODEL", "")).strip()
-        if not model:
-            # Prefer Gemini when a Google key is present; otherwise OpenAI default.
-            if os.environ.get("GOOGLE_API_KEY", "").strip():
-                model = "google_genai:gemini-2.0-flash"
-            else:
-                model = "gpt-4o"
-        if model.startswith("google_genai:") and not os.environ.get("GOOGLE_API_KEY", "").strip():
+        model = _resolve_agent_model(args.model)
+        google_key = os.environ.get("GOOGLE_API_KEY", "").strip()
+        openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
+
+        if model.startswith("google_genai:") and not google_key:
             print(
-                "Error: Gemini model selected but GOOGLE_API_KEY is not set.\n"
-                "  export GOOGLE_API_KEY='your-key-from-aistudio.google.com'\n"
-                "Do not commit the key or paste it into source files.",
+                "Error: Gemini selected but GOOGLE_API_KEY is not set.\n"
+                "  1) cp .env.example .env\n"
+                "  2) Edit .env and set GOOGLE_API_KEY=…\n"
+                "  3) Re-run: uv run python run_semantic_rfid.py --agentic\n"
+                "Do not put the key in .env.example (that file can be committed).",
                 file=sys.stderr,
             )
             return 2
-        if model.startswith(("gpt-", "o1", "o3")) and not os.environ.get(
-            "OPENAI_API_KEY", ""
-        ).strip():
+
+        if model.startswith(("gpt-", "o1", "o3", "openai:")) and not openai_key:
             print(
-                "Warning: model looks like OpenAI but OPENAI_API_KEY is not set.\n"
-                "  export OPENAI_API_KEY=…\n"
-                "  Or use Gemini:\n"
-                "    export GOOGLE_API_KEY=…\n"
-                "    uv run python run_semantic_rfid.py --agentic "
+                "Error: OpenAI model selected but OPENAI_API_KEY is not set.\n"
+                "  Or use Gemini: put GOOGLE_API_KEY in .env and run:\n"
+                "  uv run python run_semantic_rfid.py --agentic "
                 "--model google_genai:gemini-2.0-flash",
                 file=sys.stderr,
             )
+            return 2
 
         # Do not use DimOS `_common_agentic`: it pulls WebInput → missing
         # dimos.web.dimos_interface on the PyPI wheel. CLI text commands use
@@ -124,7 +141,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         print("Starting DimOS: unitree-go2 + RFID + semantic PF + agentic MCP …")
         print(f"  LLM model: {model}")
-        print("  Send text:  uv run dimos agent-send \"where is RFID tag 8f?\"")
+        print(f"  GOOGLE_API_KEY set: {bool(google_key)}")
+        print(f"  OPENAI_API_KEY set: {bool(openai_key)}")
+        print('  Send text:  uv run dimos agent-send "where is RFID tag 8f?"')
         print("  Or skill:   uv run dimos mcp call get_estimated_target_location -a tag_id=8f")
     else:
         from dimos_rfid.semantic_rfid_blueprints import unitree_go2_rfid_semantic

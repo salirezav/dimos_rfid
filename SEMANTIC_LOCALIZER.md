@@ -164,26 +164,22 @@ uv sync
 **Gemini (recommended if you have a Google AI Studio key):**
 
 ```bash
-# In THIS terminal only — do not put the key in git / README / chat
-export GOOGLE_API_KEY='paste-your-key-here'
+cd ~/Desktop/Alireza_dimos_rfid/dimos_rfid
+cp .env.example .env
+nano .env   # set GOOGLE_API_KEY=… and ROBOT_IP / RFID_API_BASE
 
-# Optional: persist locally (gitignored)
-# cp .env.example .env   # then edit GOOGLE_API_KEY=…
-
-export ROBOT_IP=<go2-wifi-ip>
-export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
-
-# If GOOGLE_API_KEY is set, --agentic defaults to Gemini automatically
+# Must be .env (gitignored), NOT .env.example — the launcher only loads .env
 uv run python run_semantic_rfid.py --agentic
-# or be explicit:
-uv run python run_semantic_rfid.py --agentic --model google_genai:gemini-2.0-flash
 ```
 
-Use the `google_genai:` prefix (not bare `gemini-…`).  
-`langchain-google-genai` is already a project dependency.
+On startup you should see:
 
-**Security:** if you ever paste a real key into chat or a committed file, **revoke it**
-in [Google AI Studio](https://aistudio.google.com/apikey) and create a new one.
+```text
+LLM model: google_genai:gemini-2.0-flash
+GOOGLE_API_KEY set: True
+```
+
+If it says `gpt-4o` or `GOOGLE_API_KEY set: False`, the key was not loaded.
 
 **OpenAI:**
 

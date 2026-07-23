@@ -12,8 +12,6 @@ Text commands do **not** need the web UI: ``dimos agent-send "…"`` goes throug
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 import os
 
 from dimos.agents.skills.navigation import NavigationSkillContainer
