@@ -132,26 +132,66 @@ Two different pieces people mix up:
 
 You do **not** buy or configure an “MCP API.” MCP runs on your machine inside DimOS.
 
+### 0. Use the correct clone / venv (important)
+
+There may be more than one checkout on this machine (e.g.
+`~/Desktop/dimos_rfid` vs `~/Desktop/Alireza_dimos_rfid/dimos_rfid`). Each has
+its **own** `.venv`. Always:
+
+```bash
+cd ~/Desktop/Alireza_dimos_rfid/dimos_rfid   # this repo (semantic localizer)
+source .venv/bin/activate                   # prompt should show (dimos-rfid)
+uv run python -c "import dimos_rfid, sys; print(dimos_rfid.__file__); print(sys.prefix)"
+```
+
+You want paths under `…/Alireza_dimos_rfid/dimos_rfid/…`. If `sys.prefix` or
+`dimos_rfid.__file__` points at another Desktop folder, you activated the wrong
+env — `deactivate`, `cd` into this repo, then `source .venv/bin/activate` again.
+Prefer `uv run …` from this directory (it always uses **this** `.venv`).
+
 ### 1. Install agent extras (if missing)
 
 ```bash
-cd /path/to/dimos_rfid
-uv sync --extra unitree
-uv pip install "dimos[agents,web]"
+cd ~/Desktop/Alireza_dimos_rfid/dimos_rfid
+uv sync
 ```
 
+`--agentic` needs MCP + LLM deps (already pulled by `dimos[agents,…]` in
+`pyproject.toml`). It does **not** need the DimOS browser web UI
+(`dimos.web.dimos_interface`), which is missing from the PyPI wheel anyway.
+
 ### 2. Choose a model for the chat agent
+
+**Gemini (Google AI Studio API key):**
+
+```bash
+uv pip install langchain-google-genai
+export GOOGLE_API_KEY=…          # AI Studio / Gemini API key
+
+uv run python run_semantic_rfid.py --agentic \
+  --model google_genai:gemini-2.0-flash
+# or: export RFID_AGENT_MODEL=google_genai:gemini-2.0-flash
+```
+
+Use the `google_genai:` prefix (not bare `gemini-…`). Bare names default to
+Vertex AI auth, which is a different credential path.
 
 **OpenAI (default model is `gpt-4o`):**
 
 ```bash
 export OPENAI_API_KEY=sk-...
+uv run python run_semantic_rfid.py --agentic
 ```
 
 **Or local Ollama** (no cloud key): install/run [Ollama](https://ollama.com), pull a model
-(e.g. `qwen3:8b`), then point DimOS at `ollama:…` (see DimOS `unitree-go2-agentic-ollama`
-blueprint pattern). Our `run_semantic_rfid.py --agentic` currently uses the default
-`McpClient` model (`gpt-4o`) unless you change it.
+(e.g. `qwen3:8b`), then:
+
+```bash
+uv run python run_semantic_rfid.py --agentic --model ollama:qwen3:8b
+```
+
+Note: DimOS `SpeakSkill` (TTS) still uses OpenAI even if the chat model is
+Gemini; it is only enabled when `OPENAI_API_KEY` is set.
 
 ### 3. Run
 
@@ -173,8 +213,10 @@ uv run dimos mcp call get_estimated_target_location -a tag_id=8f
 uv run dimos agent-send "where is RFID tag 8f?"
 ```
 
-If `--agentic` fails with missing web/agent modules, fall back to **Option A (logs)** —
-localization still works without the agent.
+If `--agentic` fails with missing LLM/agent modules, fall back to **Option A (logs)**
+or **Option B (`dimos mcp call`)** — localization still works without the chat agent.
+The launcher deliberately skips DimOS `WebInput` so a missing
+`dimos.web.dimos_interface` does not block `dimos agent-send`.
 
 ---
 

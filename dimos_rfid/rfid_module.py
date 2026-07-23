@@ -230,10 +230,16 @@ class RfidModule(Module):
         try:
             import rerun as rr
             from dimos.core.global_config import global_config
-            from dimos.visualization.rerun.constants import RERUN_GRPC_PORT
+            # Port lives on the bridge module (PyPI dimos has no rerun.constants).
+            from dimos.visualization.rerun.bridge import RERUN_GRPC_PORT
 
             if not self._rerun_connected:
-                host = global_config.rerun_host or global_config.listen_host or "127.0.0.1"
+                rr.init("dimos")
+                host = (
+                    getattr(global_config, "rerun_host", None)
+                    or getattr(global_config, "listen_host", None)
+                    or "127.0.0.1"
+                )
                 url = f"rerun+http://{host}:{RERUN_GRPC_PORT}/proxy"
                 rr.connect_grpc(url)
                 self._rerun_connected = True

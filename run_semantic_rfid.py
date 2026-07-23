@@ -44,6 +44,16 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Override RFID_PF_PARTICLES (default 5000).",
     )
+    parser.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "LLM for McpClient when using --agentic. "
+            "Examples: gpt-4o (default, needs OPENAI_API_KEY), "
+            "google_genai:gemini-2.0-flash (needs GOOGLE_API_KEY), "
+            "ollama:qwen3:8b (local Ollama)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.particles is not None:
@@ -71,18 +81,41 @@ def main(argv: list[str] | None = None) -> int:
         from dimos.agents.mcp.mcp_client import McpClient
         from dimos.agents.mcp.mcp_server import McpServer
         from dimos.core.coordination.blueprints import autoconnect
-        from dimos.robot.unitree.go2.blueprints.agentic._common_agentic import (
-            _common_agentic,
-        )
+
+        from dimos_rfid.agentic_skills import rfid_agentic_skills
         from dimos_rfid.semantic_rfid_blueprints import unitree_go2_rfid_semantic
 
+        model = (args.model or os.environ.get("RFID_AGENT_MODEL", "")).strip() or "gpt-4o"
+        if model.startswith("google_genai:") and not os.environ.get("GOOGLE_API_KEY", "").strip():
+            print(
+                "Warning: model is Gemini but GOOGLE_API_KEY is not set.\n"
+                "  export GOOGLE_API_KEY=…\n"
+                "  uv pip install langchain-google-genai",
+                file=sys.stderr,
+            )
+        if model.startswith(("gpt-", "o1", "o3")) and not os.environ.get(
+            "OPENAI_API_KEY", ""
+        ).strip():
+            print(
+                "Warning: model looks like OpenAI but OPENAI_API_KEY is not set.\n"
+                "  export OPENAI_API_KEY=…\n"
+                "  Or use Gemini: --model google_genai:gemini-2.0-flash",
+                file=sys.stderr,
+            )
+
+        # Do not use DimOS `_common_agentic`: it pulls WebInput → missing
+        # dimos.web.dimos_interface on the PyPI wheel. CLI text commands use
+        # `dimos agent-send` via McpServer.agent_send instead.
         blueprint = autoconnect(
             unitree_go2_rfid_semantic,
             McpServer.blueprint(),
-            McpClient.blueprint(),
-            _common_agentic,
+            McpClient.blueprint(model=model),
+            rfid_agentic_skills,
         )
         print("Starting DimOS: unitree-go2 + RFID + semantic PF + agentic MCP …")
+        print(f"  LLM model: {model}")
+        print("  Send text:  uv run dimos agent-send \"where is RFID tag 8f?\"")
+        print("  Or skill:   uv run dimos mcp call get_estimated_target_location -a tag_id=8f")
     else:
         from dimos_rfid.semantic_rfid_blueprints import unitree_go2_rfid_semantic
 

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "debugpy>=1.8.21",
-    "dimos[base,unitree]",
+    "dimos[agents,base,unitree,web]",
     "numpy>=1.24",
     "pytest>=9.1.1",
     "requests>=2.28",
