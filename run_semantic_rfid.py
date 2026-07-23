@@ -85,21 +85,31 @@ def main(argv: list[str] | None = None) -> int:
         from dimos_rfid.agentic_skills import rfid_agentic_skills
         from dimos_rfid.semantic_rfid_blueprints import unitree_go2_rfid_semantic
 
-        model = (args.model or os.environ.get("RFID_AGENT_MODEL", "")).strip() or "gpt-4o"
+        model = (args.model or os.environ.get("RFID_AGENT_MODEL", "")).strip()
+        if not model:
+            # Prefer Gemini when a Google key is present; otherwise OpenAI default.
+            if os.environ.get("GOOGLE_API_KEY", "").strip():
+                model = "google_genai:gemini-2.0-flash"
+            else:
+                model = "gpt-4o"
         if model.startswith("google_genai:") and not os.environ.get("GOOGLE_API_KEY", "").strip():
             print(
-                "Warning: model is Gemini but GOOGLE_API_KEY is not set.\n"
-                "  export GOOGLE_API_KEY=…\n"
-                "  uv pip install langchain-google-genai",
+                "Error: Gemini model selected but GOOGLE_API_KEY is not set.\n"
+                "  export GOOGLE_API_KEY='your-key-from-aistudio.google.com'\n"
+                "Do not commit the key or paste it into source files.",
                 file=sys.stderr,
             )
+            return 2
         if model.startswith(("gpt-", "o1", "o3")) and not os.environ.get(
             "OPENAI_API_KEY", ""
         ).strip():
             print(
                 "Warning: model looks like OpenAI but OPENAI_API_KEY is not set.\n"
                 "  export OPENAI_API_KEY=…\n"
-                "  Or use Gemini: --model google_genai:gemini-2.0-flash",
+                "  Or use Gemini:\n"
+                "    export GOOGLE_API_KEY=…\n"
+                "    uv run python run_semantic_rfid.py --agentic "
+                "--model google_genai:gemini-2.0-flash",
                 file=sys.stderr,
             )
 

@@ -161,29 +161,38 @@ uv sync
 
 ### 2. Choose a model for the chat agent
 
-**Gemini (Google AI Studio API key):**
+**Gemini (recommended if you have a Google AI Studio key):**
 
 ```bash
-uv pip install langchain-google-genai
-export GOOGLE_API_KEY=…          # AI Studio / Gemini API key
+# In THIS terminal only — do not put the key in git / README / chat
+export GOOGLE_API_KEY='paste-your-key-here'
 
-uv run python run_semantic_rfid.py --agentic \
-  --model google_genai:gemini-2.0-flash
-# or: export RFID_AGENT_MODEL=google_genai:gemini-2.0-flash
+# Optional: persist locally (gitignored)
+# cp .env.example .env   # then edit GOOGLE_API_KEY=…
+
+export ROBOT_IP=<go2-wifi-ip>
+export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
+
+# If GOOGLE_API_KEY is set, --agentic defaults to Gemini automatically
+uv run python run_semantic_rfid.py --agentic
+# or be explicit:
+uv run python run_semantic_rfid.py --agentic --model google_genai:gemini-2.0-flash
 ```
 
-Use the `google_genai:` prefix (not bare `gemini-…`). Bare names default to
-Vertex AI auth, which is a different credential path.
+Use the `google_genai:` prefix (not bare `gemini-…`).  
+`langchain-google-genai` is already a project dependency.
 
-**OpenAI (default model is `gpt-4o`):**
+**Security:** if you ever paste a real key into chat or a committed file, **revoke it**
+in [Google AI Studio](https://aistudio.google.com/apikey) and create a new one.
+
+**OpenAI:**
 
 ```bash
 export OPENAI_API_KEY=sk-...
-uv run python run_semantic_rfid.py --agentic
+uv run python run_semantic_rfid.py --agentic --model gpt-4o
 ```
 
-**Or local Ollama** (no cloud key): install/run [Ollama](https://ollama.com), pull a model
-(e.g. `qwen3:8b`), then:
+**Or local Ollama** (no cloud key):
 
 ```bash
 uv run python run_semantic_rfid.py --agentic --model ollama:qwen3:8b
@@ -192,12 +201,12 @@ uv run python run_semantic_rfid.py --agentic --model ollama:qwen3:8b
 Note: DimOS `SpeakSkill` (TTS) still uses OpenAI even if the chat model is
 Gemini; it is only enabled when `OPENAI_API_KEY` is set.
 
-### 3. Run
+### 3. Run (Gemini example)
 
 ```bash
 export ROBOT_IP=<go2-wifi-ip>
 export RFID_API_BASE=http://<go2-wifi-ip>:8765/api/v1
-export OPENAI_API_KEY=sk-...   # only for chatty agent
+export GOOGLE_API_KEY='…'   # Gemini
 
 uv run python run_semantic_rfid.py --agentic
 ```

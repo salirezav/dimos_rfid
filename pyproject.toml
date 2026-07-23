@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 dependencies = [
     "debugpy>=1.8.21",
     "dimos[agents,base,unitree,web]",
+    "langchain-google-genai>=2.0",
     "numpy>=1.24",
     "pytest>=9.1.1",
     "requests>=2.28",
