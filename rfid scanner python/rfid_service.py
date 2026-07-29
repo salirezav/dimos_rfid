@@ -68,6 +68,10 @@ class RfidScanner:
         self.config = config or ScannerConfig()
         self._lock = threading.Lock()
         self._tags: dict[str, dict[str, Any]] = {}
+        # READ_COUNT may be cumulative inside the reader.  Keep the first raw
+        # value seen for each EPC in this run so API counts start from one
+        # after clear_tag_cache(), rather than inheriting an earlier run.
+        self._read_count_baselines: dict[str, int] = {}
         self._client: Optional[AdvanNetClient] = None
         self._device_id: Optional[str] = None
         self._reader_started = False
@@ -191,12 +195,24 @@ class RfidScanner:
                 result.append(entry)
         return result
 
-    def clear_tags(self) -> int:
-        """Clear all discovered tags from memory. Returns count removed."""
+    def clear_tag_cache(self) -> int:
+        """
+        Start a fresh acquisition run.
+
+        Clears discovered tags and the per-EPC reader-count baselines.  The
+        next read of an EPC is therefore reported with read_count == 1 even
+        when the reader's raw READ_COUNT is cumulative across runs.
+        Returns the number of cached tags removed.
+        """
         with self._lock:
             count = len(self._tags)
             self._tags.clear()
+            self._read_count_baselines.clear()
         return count
+
+    def clear_tags(self) -> int:
+        """Backward-compatible alias for clear_tag_cache()."""
+        return self.clear_tag_cache()
 
     def on_tag(self, callback: Callable[[dict[str, Any]], None]) -> None:
         """Register callback invoked on each new tag read event (in-range update)."""
@@ -226,6 +242,7 @@ class RfidScanner:
         return {
             "tags": tags,
             "count": len(tags),
+            "discovered_count": len(tags),
             "active_count": sum(1 for t in tags if t["in_range"]),
             "stale_seconds": self.config.stale_seconds,
             "scanner": stream,
@@ -268,7 +285,21 @@ class RfidScanner:
         now_iso = _utc_now_iso()
         with self._lock:
             prev = self._tags.get(tag.epc)
-            event_reads = int(tag.raw_props.get("READ_COUNT", "1") or "1")
+            try:
+                raw_read_count = max(
+                    1, int(tag.raw_props.get("READ_COUNT", "1") or "1")
+                )
+            except (TypeError, ValueError):
+                raw_read_count = 1
+
+            baseline = self._read_count_baselines.get(tag.epc)
+            if baseline is None:
+                # Count the first observation in this run as one while
+                # subtracting any reader-side history from later updates.
+                baseline = raw_read_count - 1
+                self._read_count_baselines[tag.epc] = baseline
+            run_event_reads = max(1, raw_read_count - baseline)
+
             if prev:
                 total_reads = prev.get("read_count", 0) + 1
                 entry = {
@@ -279,7 +310,7 @@ class RfidScanner:
                     if tag.frequency_khz is not None
                     else prev.get("frequency_khz"),
                     "phase": tag.raw_props.get("RF_PHASE") or prev.get("phase"),
-                    "read_count": max(total_reads, event_reads),
+                    "read_count": max(total_reads, run_event_reads),
                     "last_seen": now,
                     "last_seen_iso": now_iso,
                 }
@@ -291,7 +322,7 @@ class RfidScanner:
                     "rssi_dbm": tag.rssi,
                     "antenna": tag.antenna,
                     "frequency_khz": tag.frequency_khz,
-                    "read_count": event_reads,
+                    "read_count": run_event_reads,
                     "first_seen": now,
                     "first_seen_iso": now_iso,
                     "last_seen": now,

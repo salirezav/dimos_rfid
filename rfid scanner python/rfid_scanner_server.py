@@ -110,9 +110,28 @@ def api_tag_by_epc(epc: str):
 
 @app.route("/api/v1/tags/clear", methods=["POST"])
 def api_tags_clear():
+    """Deprecated alias for /api/v1/tags/reset."""
     scanner = get_scanner()
-    removed = scanner.clear_tags()
-    return jsonify({"ok": True, "removed": removed})
+    removed = scanner.clear_tag_cache()
+    return jsonify({
+        "ok": True,
+        "success": True,
+        "message": "RFID tag cache cleared",
+        "removed": removed,
+    })
+
+
+@app.route("/api/v1/tags/reset", methods=["POST"])
+def api_tags_reset():
+    """Clear all tag and read-count state before recording a new bag."""
+    scanner = get_scanner()
+    removed = scanner.clear_tag_cache()
+    return jsonify({
+        "ok": True,
+        "success": True,
+        "message": "RFID tag cache cleared",
+        "removed": removed,
+    })
 
 
 @app.route("/api/v1/inventory")
