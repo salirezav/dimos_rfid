@@ -24,22 +24,36 @@ RFID_DIR="${DIMOS_PKG}/hardware/sensors/rfid"
 echo "Vendoring RFID module into ${RFID_DIR}..."
 mkdir -p "${RFID_DIR}"
 
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py semantic_map.py semantic_particle_filter.py rfid_tracker.py rfid_semantic_localizer.py semantic_rfid_blueprints.py focus_filter.py rfid_focus.txt; do
-    cp "${SCRIPT_DIR}/${f}" "${RFID_DIR}/${f}"
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py msgs.py rfid_module.py rfid_rerun.py _backend.py semantic_map.py semantic_particle_filter.py rfid_tracker.py rfid_semantic_localizer.py semantic_rfid_blueprints.py focus_filter.py rfid_focus.txt recorder.py rfid_power.py collection_rounds.py collection_context.py dataset_rounds_blueprints.py env.py waypoint_cli.py; do
+    if [[ -f "${SCRIPT_DIR}/${f}" ]]; then
+        cp "${SCRIPT_DIR}/${f}" "${RFID_DIR}/${f}"
+    fi
 done
 
+# Optional predetermined path examples for collection rounds.
+if [[ -d "${SCRIPT_DIR}/paths" ]]; then
+    mkdir -p "${RFID_DIR}/paths"
+    cp -r "${SCRIPT_DIR}/paths/." "${RFID_DIR}/paths/"
+fi
+
 # Blueprint stubs in dimos/ must import from dimos.hardware.sensors.rfid, not dimos_rfid.
-for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py rfid_module.py rfid_rerun.py rfid_semantic_localizer.py semantic_rfid_blueprints.py semantic_map.py semantic_particle_filter.py rfid_tracker.py focus_filter.py; do
-    sed -i \
-        -e "s/from dimos_rfid\./from ${RFID_PKG}./g" \
-        -e "s/from dimos_rfid import/from ${RFID_PKG} import/g" \
-        "${RFID_DIR}/${f}"
+for f in demo_blueprint.py go2_blueprints.py go2_agentic_blueprints.py rfid_module.py rfid_rerun.py rfid_semantic_localizer.py semantic_rfid_blueprints.py semantic_map.py semantic_particle_filter.py rfid_tracker.py focus_filter.py recorder.py rfid_power.py collection_rounds.py collection_context.py dataset_rounds_blueprints.py; do
+    if [[ -f "${RFID_DIR}/${f}" ]]; then
+        sed -i \
+            -e "s/from dimos_rfid\./from ${RFID_PKG}./g" \
+            -e "s/from dimos_rfid import/from ${RFID_PKG} import/g" \
+            "${RFID_DIR}/${f}"
+    fi
 done
 
 sed -i "s/from dimos_rfid\.go2_blueprints/from ${RFID_PKG}.go2_blueprints/g" \
     "${RFID_DIR}/go2_agentic_blueprints.py"
 sed -i "s/from dimos_rfid\.go2_blueprints/from ${RFID_PKG}.go2_blueprints/g" \
     "${RFID_DIR}/semantic_rfid_blueprints.py"
+if [[ -f "${RFID_DIR}/dataset_rounds_blueprints.py" ]]; then
+    sed -i "s/from dimos_rfid\.go2_blueprints/from ${RFID_PKG}.go2_blueprints/g" \
+        "${RFID_DIR}/dataset_rounds_blueprints.py"
+fi
 
 echo "Regenerating dimos blueprint registry..."
 uv run python - <<'PY'
@@ -60,9 +74,12 @@ echo ""
 echo "Verifying imports..."
 uv run python - <<PY
 from dimos.robot.get_all_blueprints import get_blueprint_by_name
-for name in ("rfid-demo", "unitree-go2-rfid", "unitree-go2-rfid-semantic"):
-    get_blueprint_by_name(name)
-    print(f"  {name}: OK")
+for name in ("rfid-demo", "unitree-go2-rfid", "unitree-go2-rfid-semantic", "unitree-go2-rfid-dataset", "unitree-go2-rfid-dataset-rounds"):
+    try:
+        get_blueprint_by_name(name)
+        print(f"  {name}: OK")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  {name}: SKIP ({exc})")
 PY
 
 echo ""

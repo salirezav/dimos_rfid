@@ -6,24 +6,22 @@ from typing import Any
 
 # Must match LCM topic /rfid/tags → Rerun entity prefix world + /rfid/tags
 RFID_RERUN_ENTITY = "world/rfid/tags"
+# Live multi-round collection status / log (written by RfidCollectionRoundsModule).
+COLLECTION_RERUN_ENTITY = "world/rfid/collection"
+
+
+def _text_view(origin: str, name: str) -> Any:
+    import rerun.blueprint as rrb
+
+    if hasattr(rrb, "TextDocumentView"):
+        return rrb.TextDocumentView(origin=origin, name=name)
+    return rrb.TextLogView(origin=origin, name=name)
 
 
 def go2_rfid_rerun_blueprint() -> Any:
     """Go2 layout: Camera | 3D map | RFID tag list."""
     import rerun as rr
     import rerun.blueprint as rrb
-
-    rfid_view: Any
-    if hasattr(rrb, "TextDocumentView"):
-        rfid_view = rrb.TextDocumentView(
-            origin=RFID_RERUN_ENTITY,
-            name="RFID",
-        )
-    else:
-        rfid_view = rrb.TextLogView(
-            origin=RFID_RERUN_ENTITY,
-            name="RFID",
-        )
 
     return rrb.Blueprint(
         rrb.Horizontal(
@@ -39,8 +37,39 @@ def go2_rfid_rerun_blueprint() -> Any:
                     "world/lidar": rrb.EntityBehavior(visible=False),
                 },
             ),
-            rfid_view,
+            _text_view(RFID_RERUN_ENTITY, "RFID"),
             column_shares=[2, 3, 1],
+        ),
+        rrb.TimePanel(state="collapsed"),
+        rrb.SelectionPanel(state="collapsed"),
+    )
+
+
+def go2_rfid_collection_rerun_blueprint() -> Any:
+    """Go2 layout: Camera | 3D | RFID tags | Collection live log."""
+    import rerun as rr
+    import rerun.blueprint as rrb
+
+    return rrb.Blueprint(
+        rrb.Horizontal(
+            rrb.Spatial2DView(origin="world/color_image", name="Camera"),
+            rrb.Spatial3DView(
+                origin="world",
+                name="3D",
+                background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
+                line_grid=rrb.LineGrid3D(
+                    plane=rr.components.Plane3D.XY.with_distance(0.5),
+                ),
+                overrides={
+                    "world/lidar": rrb.EntityBehavior(visible=False),
+                },
+            ),
+            rrb.Vertical(
+                _text_view(RFID_RERUN_ENTITY, "RFID"),
+                _text_view(COLLECTION_RERUN_ENTITY, "Collection"),
+                row_shares=[1, 1],
+            ),
+            column_shares=[2, 3, 2],
         ),
         rrb.TimePanel(state="collapsed"),
         rrb.SelectionPanel(state="collapsed"),
@@ -75,4 +104,11 @@ def go2_rfid_rerun_config() -> dict[str, Any]:
 
         cfg["pubsubs"] = [LCM()]
 
+    return cfg
+
+
+def go2_rfid_collection_rerun_config() -> dict[str, Any]:
+    """Rerun layout that includes the live collection status panel."""
+    cfg = go2_rfid_rerun_config()
+    cfg["blueprint"] = go2_rfid_collection_rerun_blueprint
     return cfg

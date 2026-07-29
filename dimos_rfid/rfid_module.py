@@ -67,6 +67,9 @@ class RfidModule(Module):
 
     config: RfidModuleConfig
     rfid_tags: Out[RfidTagArray]
+    # Full-rate stream for dataset collection and algorithms that need RSSI
+    # changes. Unlike ``rfid_tags``, this publishes every reader event/poll.
+    rfid_samples: Out[RfidTagArray]
 
     _scanner: Any = None
     _latest: RfidTagArray | None = None
@@ -252,6 +255,7 @@ class RfidModule(Module):
 
     def _publish_tags(self, array: RfidTagArray, *, force: bool = False) -> None:
         self._latest = array
+        self.rfid_samples.publish(array)
         if not force and not self._should_publish(array):
             self._maybe_refresh_rerun(array)
             return
@@ -366,6 +370,48 @@ class RfidModule(Module):
             f"tags={status.get('tag_count')} "
             f"active={status.get('active_count')}"
         )
+
+    @rpc
+    def get_rfid_power(self) -> dict[str, Any]:
+        """Return current reader TX power / sensitivity via the dog HTTP API."""
+        from dimos_rfid.rfid_power import RfidPowerError, get_power
+
+        try:
+            payload = get_power(self._api_base())
+            return {"ok": True, **payload}
+        except RfidPowerError as exc:
+            return {"ok": False, "message": str(exc)}
+
+    @rpc
+    def set_rfid_power(
+        self,
+        read_power: float | None = None,
+        write_power: float | None = None,
+        sensitivity: float | None = None,
+    ) -> dict[str, Any]:
+        """Set reader power fields (dBm). At least ``read_power`` is typical for collection.
+
+        Args:
+            read_power: Inventory transmit power (0–31.5, 0.5 steps).
+            write_power: Optional write power.
+            sensitivity: Optional receive sensitivity (more negative = weaker tags).
+        """
+        from dimos_rfid.rfid_power import RfidPowerError, set_power, set_read_power
+
+        try:
+            if write_power is None and sensitivity is None and read_power is not None:
+                payload = set_read_power(self._api_base(), float(read_power))
+            else:
+                payload = set_power(
+                    self._api_base(),
+                    read_power=read_power,
+                    write_power=write_power,
+                    sensitivity=sensitivity,
+                )
+            logger.info("RFID power updated: %s", payload)
+            return {"ok": True, **payload}
+        except (RfidPowerError, ValueError) as exc:
+            return {"ok": False, "message": str(exc)}
 
     def attach_rfid_tracker(self, tracker: Any) -> None:
         """Attach an :class:`~dimos_rfid.rfid_tracker.RFIDTracker` for agent location skills."""

@@ -20,7 +20,7 @@ supported-markers = [
 
 [manifest]
 overrides = [
-    { name = "dimos-viewer", marker = "sys_platform == 'linux'" },
+    { name = "dimos-viewer", marker = "sys_platform == 'linux'", specifier = ">=0.32.0a2" },
     { name = "lcm-dimos-fork", marker = "sys_platform == 'linux'" },
     { name = "pin", marker = "sys_platform == 'linux'" },
 ]
@@ -1075,6 +1075,7 @@ dependencies = [
     { name = "pytest", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "python-dotenv", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
     { name = "requests", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
+    { name = "rerun-sdk", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 
 [package.optional-dependencies]
@@ -1098,17 +1099,18 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "requests", specifier = ">=2.28" },
     { name = "requests", marker = "extra == 'robot'", specifier = ">=2.28" },
+    { name = "rerun-sdk", specifier = ">=0.32.0,<0.33" },
 ]
 provides-extras = ["unitree", "robot"]
 
 [[package]]
 name = "dimos-viewer"
-version = "0.32.0a1"
+version = "0.32.0a2"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/09/d9/cccad09df71d14b84f95fb384213d0d2eb36efb25db11fafe12e3f27454e/dimos_viewer-0.32.0a1-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:6db249eff2014f746e7b840a9354dc57e182d8b05bee360fdc934f34c0d4a6da", size = 44794930, upload-time = "2026-05-19T14:55:02.2Z" },
-    { url = "https://files.pythonhosted.org/packages/fd/c3/0c32f2a5e0908dcab3d8b652704d68124cbe2d74ca418561e503fa216cff/dimos_viewer-0.32.0a1-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:f4a4b6e1aa83b50421a7133b22c27c0924b2f984a242d30273087f66928af5d8", size = 44794937, upload-time = "2026-05-19T14:55:12.888Z" },
-    { url = "https://files.pythonhosted.org/packages/ca/4b/d97f13e3585582c79037cd24952ac99de593a30c300ddcc8c83d9cab1128/dimos_viewer-0.32.0a1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:ebdd64ce20d73e9d6e0256ef099a3d544c14b9b227aa005ba8c362052889b3c4", size = 44794790, upload-time = "2026-05-19T14:55:24.211Z" },
+    { url = "https://files.pythonhosted.org/packages/49/2a/b413d4f86bc306dd26f6ee1206cc3f4f0df6e3f9e9ec2a4d20ec5824d616/dimos_viewer-0.32.0a2-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:c38af675e708494aad8d66b4a7a35974633400d897e4dd73f9dba8562c04282a", size = 44799199, upload-time = "2026-07-22T18:49:44.014Z" },
+    { url = "https://files.pythonhosted.org/packages/8e/b1/15d3579109ee6b6f8aa93642340eced7c444849433fc04ed0c3715f963ae/dimos_viewer-0.32.0a2-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:c13479d8266606b1e7dcf1296d091b229374a83d84ba16849b2bbd830413ed5f", size = 44799215, upload-time = "2026-07-22T18:49:54.529Z" },
+    { url = "https://files.pythonhosted.org/packages/2e/15/b38b583cdf07082d58ca33500343da8153d7859133e2c924922873364c42/dimos_viewer-0.32.0a2-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:4a32c39c8cc8e9a03f2cc9d8446e7d49a132692f833cbd7277c185f171ede614", size = 44799194, upload-time = "2026-07-22T18:50:04.462Z" },
 ]
 
 [[package]]
@@ -3944,7 +3946,7 @@ wheels = [
 
 [[package]]
 name = "rerun-sdk"
-version = "0.33.1"
+version = "0.32.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
@@ -3956,8 +3958,8 @@ dependencies = [
     { name = "typing-extensions", marker = "(platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32')" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/04/28/fd3b832652900fe3415739e7411c8af8af4c44e9e1a9d55d79e37f7f9094/rerun_sdk-0.33.1-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:0f87da7a270614074aca37846350f9e257f65081345474748f578c7da64fdeba", size = 139565470, upload-time = "2026-06-22T09:04:34.941Z" },
-    { url = "https://files.pythonhosted.org/packages/19/41/339920f5a6734054c07bcae543365a7ef3368ceee3eb67906e2e38bd1d67/rerun_sdk-0.33.1-cp310-abi3-win_amd64.whl", hash = "sha256:b2c2af67f3c2a85b282669d97b52596593fcfdd19bf57c423f18827c837a6e49", size = 120411717, upload-time = "2026-06-22T09:04:42.643Z" },
+    { url = "https://files.pythonhosted.org/packages/cc/cf/0e8a7687f9c8554f9ba9c7497e40fe5bf1fc0e6e11ad7d8cef55d11439fb/rerun_sdk-0.32.2-cp310-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:7b4d104c1c7aa1e5abd093807b4f9787345d7f82613418ed0a301aa89fc6b30d", size = 138982315, upload-time = "2026-05-20T14:16:36.771Z" },
+    { url = "https://files.pythonhosted.org/packages/36/cd/52e319cf80636b7fec8e981dd6b241b458cdd9007ddf26870d0e382f592f/rerun_sdk-0.32.2-cp310-abi3-win_amd64.whl", hash = "sha256:7f52f5419c2f50aa122331cd6913eab27085ac2972cde7a8481b78bd4cc85dbf", size = 119848450, upload-time = "2026-05-20T14:16:44.417Z" },
 ]
 
 [[package]]

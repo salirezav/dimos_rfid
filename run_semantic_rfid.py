@@ -14,29 +14,13 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from pathlib import Path
 
 
 def _load_dotenv() -> None:
     """Load repo-root ``.env`` into os.environ (does not override existing vars)."""
-    env_path = Path(__file__).resolve().parent / ".env"
-    if not env_path.is_file():
-        return
-    try:
-        from dotenv import load_dotenv
-    except ImportError:
-        # Minimal fallback parser if python-dotenv is not installed.
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, val = line.partition("=")
-            key = key.strip()
-            val = val.strip().strip("'").strip('"')
-            if key and key not in os.environ:
-                os.environ[key] = val
-        return
-    load_dotenv(env_path, override=False)
+    from dimos_rfid.env import load_repo_dotenv
+
+    load_repo_dotenv(override=False)
 
 
 def _resolve_agent_model(cli_model: str | None) -> str:

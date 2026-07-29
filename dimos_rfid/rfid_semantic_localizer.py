@@ -129,8 +129,11 @@ class RfidSemanticLocalizerModule(Module):
     _semantic_map: SemanticOccupancyGrid3D | None = None
     _focus: FocusFilter | None = None
     _last_log_ts: float = 0.0
+    _last_warn_ts: float = 0.0
     _rerun_connected: bool = False
+    _rerun_fail_logged: bool = False
     _drawn_markers: set[str] | None = None
+    _markers_logged_once: bool = False
 
     @rpc
     def start(self) -> None:
@@ -236,20 +239,32 @@ class RfidSemanticLocalizerModule(Module):
             return pos, yaw, pitch
         return None
 
+    def _warn_throttled(self, now: float, msg: str, *args: Any) -> None:
+        """Emit at most one warning every 5s so silent skips are visible in the UI logs."""
+        if now - self._last_warn_ts < 5.0:
+            return
+        self._last_warn_ts = now
+        logger.warning(msg, *args)
+
     def _on_tags(self, msg: RfidTagArray) -> None:
         if self._tracker is None or self._semantic_map is None:
             return
+        now = time.time()
         pose = self._dog_pose()
         if pose is None:
-            logger.debug("No TF pose yet; skipping particle-filter update")
+            self._warn_throttled(
+                now,
+                "No TF pose yet (need world←base_link); skipping particle-filter update "
+                "— markers will not appear until odometry/TF is ready",
+            )
             return
         dog_pos, yaw, pitch = pose
-        now = time.time()
-        for tag in msg.active_tags():
-            if tag.rssi_dbm is None or not tag.epc:
-                continue
+        active = [t for t in msg.active_tags() if t.epc and t.rssi_dbm is not None]
+        matched = 0
+        for tag in active:
             if self._focus is not None and not self._focus.matches(tag.epc):
                 continue
+            matched += 1
             self._tracker.ingest(
                 float(dog_pos[0]),
                 float(dog_pos[1]),
@@ -260,6 +275,19 @@ class RfidSemanticLocalizerModule(Module):
                 float(tag.rssi_dbm),
                 self._semantic_map,
                 timestamp=now,
+            )
+
+        if active and matched == 0 and self._focus is not None and self._focus.active:
+            suffixes = sorted({(t.epc or "")[-8:] for t in active if t.epc})
+            self._warn_throttled(
+                now,
+                "Focus %s matched 0 of %d in-range tag(s). "
+                "No estimates/markers until the TOI is seen. "
+                "Active suffixes: %s — edit dimos_rfid/rfid_focus.txt "
+                "(or clear it to localize all)",
+                self._focus.patterns(),
+                len(active),
+                suffixes,
             )
 
         hz = float(self.config.log_estimates_hz)
@@ -310,10 +338,18 @@ class RfidSemanticLocalizerModule(Module):
                 )
                 rr.connect_grpc(f"rerun+http://{host}:{RERUN_GRPC_PORT}/proxy")
                 self._rerun_connected = True
+                self._rerun_fail_logged = False
+                logger.info("Connected to Rerun gRPC for RFID markers (host=%s)", host)
             return rr
         except Exception as exc:  # noqa: BLE001
             self._rerun_connected = False
-            logger.debug("Rerun connect failed (will retry): %s", exc)
+            if not self._rerun_fail_logged:
+                self._rerun_fail_logged = True
+                logger.warning(
+                    "Rerun connect failed (markers hidden until bridge is up): %s", exc
+                )
+            else:
+                logger.debug("Rerun connect failed (will retry): %s", exc)
             return None
 
     def _quality_color(self, quality: float) -> list[int]:
@@ -350,6 +386,15 @@ class RfidSemanticLocalizerModule(Module):
             self._log_marker_3d(rr, tag_id, loc, conf)
             self._log_marker_camera(rr, tag_id, loc, conf, cam_from_world)
             visible_now.add(tag_id)
+
+        if visible_now and not self._markers_logged_once:
+            self._markers_logged_once = True
+            logger.info(
+                "Drawing RFID markers in Rerun: 3D under %s, "
+                "camera overlay under %s/rfid/… (2D only when tag is in frame)",
+                MARKERS_3D_ENTITY,
+                CAMERA_IMAGE_ENTITY,
+            )
 
         for epc in list(self._drawn_markers - visible_now):
             self._clear_marker(rr, epc)

@@ -16,6 +16,9 @@ dependencies = [
     "pytest>=9.1.1",
     "python-dotenv>=1.0",
     "requests>=2.28",
+    # Keep in lockstep with dimos-viewer (0.32.x). SDK 0.33 + viewer 0.32
+    # blanks the 3D map (incompatible Rerun encodings).
+    "rerun-sdk>=0.32.0,<0.33",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +37,7 @@ environments = [
 ]
 # Linux-only DimOS deps (no Windows wheels); still installed on Linux targets.
 override-dependencies = [
-    "dimos-viewer; sys_platform == 'linux'",
+    "dimos-viewer>=0.32.0a2; sys_platform == 'linux'",
     "pin; sys_platform == 'linux'",
     "lcm-dimos-fork; sys_platform == 'linux'",
 ]

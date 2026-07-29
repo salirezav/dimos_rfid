@@ -1,6 +1,7 @@
 """DimOS integration for the Vulcan RFID scanner."""
 
 from dimos_rfid.msgs import RfidTag, RfidTagArray
+from dimos_rfid.recorder import RfidRecorderConfig, RfidRecorderModule
 from dimos_rfid.rfid_module import RfidModule, RfidModuleConfig
 from dimos_rfid.rfid_semantic_localizer import (
     RfidSemanticLocalizerConfig,
@@ -15,6 +16,8 @@ __all__ = [
     "RFIDTracker",
     "RfidModule",
     "RfidModuleConfig",
+    "RfidRecorderConfig",
+    "RfidRecorderModule",
     "RfidSemanticLocalizerConfig",
     "RfidSemanticLocalizerModule",
     "RfidTag",

@@ -1,0 +1,22 @@
+{
+  "path_id": "lab_loop2",
+  "frame_id": "world",
+  "description": "Recorded by teleop path-recording mode",
+  "recorded_at": "2026-07-29T18:44:14.414384+00:00",
+  "waypoints": [
+    {
+      "x": -0.696,
+      "y": 0.742,
+      "z": 0.312,
+      "yaw": -1.7683,
+      "frame_id": "world"
+    },
+    {
+      "x": -0.694,
+      "y": 0.742,
+      "z": 0.312,
+      "yaw": -1.7619,
+      "frame_id": "world"
+    }
+  ]
+}

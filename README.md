@@ -18,6 +18,7 @@ Dimos/
 ├── pyproject.toml               ← project metadata and dependencies (uv)
 ├── uv.lock                      ← locked dependency versions
 ├── run_semantic_rfid.py         ← run DimOS + semantic RFID localizer
+├── DATASET_README.md            ← dataset / path-record / power-ladder guide
 ├── SEMANTIC_LOCALIZER.md        ← how to use / query the semantic localizer
 ├── rfid scanner python/         ← runs on the robot (reader hardware access)
 │   ├── rfid_scanner_server.py   ← Flask HTTP API + web UI (port 8765)
@@ -226,6 +227,15 @@ uv run dimos run rfid-demo
 ```bash
 uv run python -m dimos_rfid go2
 ```
+
+**RFID dataset collection** (walk/teleop, path record/replay, power ladder):
+
+```bash
+uv run python -m dimos_rfid go2-dataset
+uv run python -m dimos_rfid go2-dataset-rounds
+```
+
+See **[DATASET_README.md](DATASET_README.md)** for path recording, replay, env vars, and output format.
 
 ### 7. Verify RFID data
 

@@ -2,4 +2,4 @@
 # Empty file = localize ALL in-range tags. Edit while running; changes apply next poll.
 # Examples:
 #   8f
-#   E280116060000203B5A908F
+# E280116060000203B5A908F
