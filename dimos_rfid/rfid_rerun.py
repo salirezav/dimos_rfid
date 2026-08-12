@@ -84,7 +84,6 @@ def _rfid_visual_override(msg: Any) -> Any:
 
 def go2_rfid_rerun_config() -> dict[str, Any]:
     """Merge Go2 Rerun settings with RFID panel layout."""
-    from dimos.protocol.pubsub.impl.lcmpubsub import LCM, PickleLCM
     from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
 
     cfg = {**rerun_config}
@@ -98,16 +97,15 @@ def go2_rfid_rerun_config() -> dict[str, Any]:
     max_hz[RFID_RERUN_ENTITY] = 1.0
     cfg["max_hz"] = max_hz
 
-    # RFID uses pLCMTransport (PickleLCM). The default Go2 bridge only
-    # listens on typed LCM, so without PickleLCM the RFID panel never updates.
-    pubsubs = list(cfg.get("pubsubs") or [])
-    has_typed = any(type(p) is LCM for p in pubsubs)
-    has_pickle = any(isinstance(p, PickleLCM) for p in pubsubs)
-    if not has_typed:
-        pubsubs.append(LCM())
-    if not has_pickle:
-        pubsubs.append(PickleLCM())
-    cfg["pubsubs"] = pubsubs
+    # Do NOT add PickleLCM to bridge pubsubs. RFID uses pLCMTransport, but
+    # RerunBridgeModule.subscribe_all() would then try to pickle.loads() every
+    # typed LCM message on the bus (lidar, costmaps, …) and spam UnpicklingError.
+    # RfidModule logs the panel directly over Rerun gRPC instead.
+
+    if "pubsubs" not in cfg:
+        from dimos.protocol.pubsub.impl.lcmpubsub import LCM
+
+        cfg["pubsubs"] = [LCM()]
 
     return cfg
 
