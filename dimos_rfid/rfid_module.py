@@ -233,11 +233,12 @@ class RfidModule(Module):
         try:
             import rerun as rr
             from dimos.core.global_config import global_config
-            # Port lives on the bridge module (PyPI dimos has no rerun.constants).
             from dimos.visualization.rerun.bridge import RERUN_GRPC_PORT
+            from dimos.visualization.rerun.init import rerun_init
 
             if not self._rerun_connected:
-                rr.init("dimos")
+                # Must share the bridge's app id ("dimos") or the panel stays empty.
+                rerun_init("dimos")
                 host = (
                     getattr(global_config, "rerun_host", None)
                     or getattr(global_config, "listen_host", None)
@@ -251,7 +252,7 @@ class RfidModule(Module):
         except Exception as exc:
             # Bridge may not be up yet on first poll; retry next tick.
             self._rerun_connected = False
-            logger.debug("Rerun RFID panel update failed (will retry): %s", exc)
+            logger.warning("Rerun RFID panel update failed (will retry): %s", exc)
 
     def _publish_tags(self, array: RfidTagArray, *, force: bool = False) -> None:
         self._latest = array
