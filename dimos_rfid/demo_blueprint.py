@@ -10,7 +10,7 @@ from dimos.visualization.rerun.bridge import RerunBridgeModule
 
 from dimos_rfid.msgs import RfidTagArray
 from dimos_rfid.rfid_module import RfidModule
-from dimos_rfid.rfid_rerun import go2_rfid_rerun_blueprint
+from dimos_rfid.rfid_rerun import rfid_only_rerun_blueprint
 
 rfid_demo = autoconnect(
     RfidModule.blueprint(
@@ -19,7 +19,7 @@ rfid_demo = autoconnect(
     ),
     # Layout only — RfidModule pushes tag text over Rerun gRPC (not PickleLCM
     # subscribe_all, which would try to unpickle unrelated LCM traffic).
-    RerunBridgeModule.blueprint(blueprint=go2_rfid_rerun_blueprint),
+    RerunBridgeModule.blueprint(blueprint=rfid_only_rerun_blueprint),
 ).transports(
     {
         ("rfid_tags", RfidTagArray): pLCMTransport("/rfid/tags"),

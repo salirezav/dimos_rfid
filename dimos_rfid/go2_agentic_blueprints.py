@@ -17,6 +17,7 @@ from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
 unitree_go2_rfid_agentic = autoconnect(
     unitree_go2,
     _rfid_module_blueprint(),
+    # Preserve upstream Go2 visualization; append only the RFID text panel.
     RerunBridgeModule.blueprint(**go2_rfid_rerun_config()),
     McpServer.blueprint(),
     McpClient.blueprint(),

@@ -51,7 +51,8 @@ def _recorder_blueprint(*, auto_start: bool = False):
 unitree_go2_rfid = autoconnect(
     unitree_go2,
     _rfid_module_blueprint(),
-    # Override Go2 Rerun layout: add RFID tag list panel (later module wins).
+    # Reuse every upstream bridge setting and wrap its untouched viewport with
+    # a narrow RFID panel. The original point-cloud view remains the same object.
     RerunBridgeModule.blueprint(**go2_rfid_rerun_config()),
 ).transports(_RFID_TRANSPORTS)
 

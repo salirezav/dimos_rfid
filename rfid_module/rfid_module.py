@@ -13,10 +13,10 @@ Ways to run it natively (all bypass the `dimos` CLI daemon):
 `--ui` opens the same viewer `dimos run` uses (`dimos-viewer`) with just the RFID
 panel. The module owns the viewer in its own process so it renders reliably.
 
-`--go2` runs the real Go2 stack (camera + 3D lidar) and overrides its Rerun
-layout with a camera | 3D | RFID panel. The Go2 modules feed camera/lidar to the
-viewer; this module logs its tag text to the RFID panel. Requires the robot to be
-reachable (same as `dimos run unitree-go2`).
+`--go2` runs the real Go2 stack (camera + 3D lidar), keeps its upstream Rerun
+viewport intact, and appends an RFID panel. The Go2 modules feed camera/lidar to
+the original viewer; this module logs its tag text to the additional panel.
+Requires the robot to be reachable (same as `dimos run unitree-go2`).
 
 `--go2` also drops a spatial marker per tag. RFID gives only signal strength, so
 a tag can't be located from one reading; as the dog is driven around and re-sees
@@ -540,68 +540,15 @@ MARKERS_3D_ENTITY = "world/rfid/markers"  # 3D world view
 # space and only render when the point projects inside the frame.
 CAMERA_IMAGE_ENTITY = "world/color_image"
 
-# Go2 Rerun panel origin (must match ``_go2_rfid_rerun_blueprint``).
+# Go2 Rerun panel origin (shared with ``dimos_rfid.rfid_rerun``).
 GO2_RFID_RERUN_ENTITY = "world/rfid/tags"
 
 
-def _go2_rfid_rerun_blueprint() -> Any:
-    """Go2 layout: Camera | 3D map | RFID tag list."""
-    import rerun as rr
-    import rerun.blueprint as rrb
-
-    if hasattr(rrb, "TextDocumentView"):
-        rfid_view = rrb.TextDocumentView(origin=GO2_RFID_RERUN_ENTITY, name="RFID")
-    else:
-        rfid_view = rrb.TextLogView(origin=GO2_RFID_RERUN_ENTITY, name="RFID")
-
-    return rrb.Blueprint(
-        rrb.Horizontal(
-            rrb.Spatial2DView(origin="world/color_image", name="Camera"),
-            rrb.Spatial3DView(
-                origin="world",
-                name="3D",
-                background=rrb.Background(kind="SolidColor", color=[0, 0, 0]),
-                line_grid=rrb.LineGrid3D(
-                    plane=rr.components.Plane3D.XY.with_distance(0.5),
-                ),
-                overrides={
-                    "world/lidar": rrb.EntityBehavior(visible=False),
-                },
-            ),
-            rfid_view,
-            column_shares=[2, 3, 1],
-        ),
-        rrb.TimePanel(state="collapsed"),
-        rrb.SelectionPanel(state="collapsed"),
-    )
-
-
-def _rfid_visual_override(_msg: Any) -> Any:
-    """No-op visual override for the RFID text panel (must be picklable for workers)."""
-    return None
-
-
 def _go2_rfid_rerun_config() -> dict[str, Any]:
-    """Merge Go2 Rerun settings with the RFID panel layout."""
-    from dimos.robot.unitree.go2.blueprints.basic.unitree_go2_basic import rerun_config
+    """Delegate to the single upstream-preserving Go2/RFID layout."""
+    from dimos_rfid.rfid_rerun import go2_rfid_rerun_config
 
-    cfg = {**rerun_config}
-    cfg["blueprint"] = _go2_rfid_rerun_blueprint
-
-    visual_override = dict(cfg.get("visual_override", {}))
-    visual_override[GO2_RFID_RERUN_ENTITY] = _rfid_visual_override
-    cfg["visual_override"] = visual_override
-
-    max_hz = dict(cfg.get("max_hz", {}))
-    max_hz[GO2_RFID_RERUN_ENTITY] = 1.0
-    cfg["max_hz"] = max_hz
-
-    if "pubsubs" not in cfg:
-        from dimos.protocol.pubsub.impl.lcmpubsub import LCM
-
-        cfg["pubsubs"] = [LCM()]
-
-    return cfg
+    return go2_rfid_rerun_config()
 
 
 class RFIDModule(Module):
@@ -1152,11 +1099,10 @@ def run_with_ui(config: RFIDConfig) -> None:
 
 
 def run_with_go2(config: RFIDConfig) -> None:
-    """Run the full Go2 stack (camera + 3D lidar) with the RFID panel added.
+    """Run the full Go2 stack with its original viewport plus an RFID panel.
 
-    Reuses DimOS's Go2 blueprint and overrides its Rerun layout with the shipped
-    camera | 3D | RFID layout. This module logs its tags to the RFID entity that
-    the panel reads; the Go2 modules feed camera + lidar to the same viewer.
+    The layout wrapper embeds DimOS's actual upstream viewport rather than
+    reconstructing its Camera/3D views, so point-cloud behavior stays upstream.
     """
     from dimos.robot.unitree.go2.blueprints.smart.unitree_go2 import unitree_go2
     from dimos.visualization.rerun.bridge import RerunBridgeModule
