@@ -141,10 +141,12 @@ class RfidTagArray:
 
         return "\n".join(lines)
 
-    def to_rerun(self) -> rr.TextDocument | rr.TextLog:
-        """For RerunBridge LCM path (also logged directly from RfidModule)."""
+    def to_rerun(self, *, static: bool = True) -> rr.TextDocument | rr.TextLog:
+        """Markdown panel for Rerun (``static=True`` keeps it visible on the live timeline)."""
         text = self.to_markdown_panel()
         try:
-            return rr.TextDocument(text, media_type=rr.MediaType.MARKDOWN)
+            doc = rr.TextDocument(text, media_type=rr.MediaType.MARKDOWN)
         except (AttributeError, TypeError):
             return rr.TextLog(text, level=rr.TextLogLevel.INFO)
+        # TextLog has no static flag; caller uses rr.log(..., static=...) for TextDocument.
+        return doc

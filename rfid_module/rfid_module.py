@@ -561,6 +561,7 @@ class RFIDModule(Module):
     _poll_task: Future[Any] | None = None
     _stop_flag: threading.Event | None = None
     _rerun_connected: bool = False
+    _rerun_initialized: bool = False
     # EPC -> localizer accumulating that tag's sightings.
     _locs: dict[str, _TagLocalizer] | None = None
     _motion: _DogMotionTracker | None = None
@@ -830,6 +831,25 @@ class RFIDModule(Module):
                     lines.append(f"| `{epc}` | {rssi_s} |")
         return "\n".join(lines)
 
+    def _ensure_rerun_connection(self) -> None:
+        """Connect to the RerunBridge gRPC proxy opened by the Go2 stack."""
+        import rerun as rr
+
+        from dimos.core.global_config import global_config
+        from dimos.visualization.rerun.constants import RERUN_GRPC_PORT
+        from dimos.visualization.rerun.init import rerun_init
+
+        if not self._rerun_initialized:
+            rerun_init("dimos")
+            self._rerun_initialized = True
+
+        if self._rerun_connected:
+            return
+
+        host = getattr(global_config, "listen_host", None) or "127.0.0.1"
+        rr.connect_grpc(f"rerun+http://{host}:{RERUN_GRPC_PORT}/proxy")
+        self._rerun_connected = True
+
     def _log_rerun(self, payload: dict) -> None:
         """Push the current tag list to the viewer as a text panel.
 
@@ -840,22 +860,15 @@ class RFIDModule(Module):
         try:
             import rerun as rr
 
-            if not self._rerun_connected:
-                from dimos.core.global_config import global_config
-                from dimos.visualization.rerun.bridge import RERUN_GRPC_PORT
-
-                rr.init("dimos")
-                host = getattr(global_config, "listen_host", None) or "127.0.0.1"
-                rr.connect_grpc(f"rerun+http://{host}:{RERUN_GRPC_PORT}/proxy")
-                self._rerun_connected = True
+            self._ensure_rerun_connection()
 
             md = self._tags_markdown(payload)
             try:
-                rr.log(self.config.rerun_entity, rr.TextDocument(md, media_type=rr.MediaType.MARKDOWN))
+                doc = rr.TextDocument(md, media_type=rr.MediaType.MARKDOWN)
+                rr.log(self.config.rerun_entity, doc, static=True)
             except (AttributeError, TypeError):
                 rr.log(self.config.rerun_entity, rr.TextLog(md))
         except Exception as exc:  # noqa: BLE001 - never let UI logging break polling
-            # Bridge viewer may not be up on the first poll; retry next tick.
             self._rerun_connected = False
             logger.debug("RFIDModule: rerun log failed (will retry): %s", exc)
 
@@ -871,6 +884,8 @@ class RFIDModule(Module):
             import rerun as rr
         except Exception:  # noqa: BLE001
             return
+
+        rr.set_time("dimos_time", timestamp=time.time())
 
         assert self._locs is not None
         assert self._motion is not None

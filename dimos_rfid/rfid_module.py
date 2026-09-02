@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import time
+from pathlib import Path
 from typing import Any, Literal
 
 import requests
@@ -26,6 +27,7 @@ from dimos.utils.logging_config import setup_logger
 from dimos_rfid._backend import create_direct_scanner
 from dimos_rfid.msgs import RfidTagArray
 from dimos_rfid.rfid_rerun import RFID_RERUN_ENTITY
+from dimos_rfid.rfid_spatial import RfidSpatialConfig, RfidSpatialTracker
 
 logger = setup_logger()
 
@@ -55,6 +57,18 @@ class RfidModuleConfig(ModuleConfig):
         default=0.25,
         description="Height of RFID antenna above base_link (meters).",
     )
+    spatial: bool = Field(
+        default=True,
+        description="Draw RSSI-multilaterated tag markers on the Rerun SLAM map.",
+    )
+    focus_file: str = Field(
+        default_factory=lambda: os.environ.get("RFID_FOCUS_FILE", ""),
+        description="Optional EPC focus list (one suffix/EPC per line). Empty = show all.",
+    )
+    focus_epcs: list[str] = Field(
+        default_factory=list,
+        description="EPC suffixes to focus on (substring match). Empty = show all.",
+    )
 
 
 class RfidModule(Module):
@@ -76,12 +90,32 @@ class RfidModule(Module):
     _connection_mode: Literal["http", "direct"] = "http"
     _last_publish_key: tuple[Any, ...] | None = None
     _rerun_connected: bool = False
+    _rerun_initialized: bool = False
     _last_logged_active: int = -1
     _last_rerun_ts: float = 0.0
+    _spatial: RfidSpatialTracker | None = None
 
     def _api_base(self) -> str:
         """Env wins over blueprint config (re-read each poll)."""
         return os.environ.get("RFID_API_BASE", self.config.api_base).rstrip("/")
+
+    def _spatial_enabled(self) -> bool:
+        env = os.environ.get("RFID_SPATIAL")
+        if env is not None:
+            return env.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(self.config.spatial)
+
+    def _spatial_config(self) -> RfidSpatialConfig:
+        focus_file = self.config.focus_file or os.environ.get("RFID_FOCUS_FILE", "")
+        if not focus_file:
+            for candidate in ("rfid_module/rfid_focus.txt", "rfid_focus.txt"):
+                if Path(candidate).is_file():
+                    focus_file = candidate
+                    break
+        return RfidSpatialConfig(
+            focus_epcs=list(self.config.focus_epcs),
+            focus_file=focus_file,
+        )
 
     @rpc
     def start(self) -> None:
@@ -91,6 +125,9 @@ class RfidModule(Module):
             raise ValueError(f"RFID_CONNECTION_MODE must be 'http' or 'direct', got {mode!r}")
         self._connection_mode = mode
         self._publish_antenna_tf()
+        if self._spatial_enabled():
+            self._spatial = RfidSpatialTracker(self.tf, self._spatial_config())
+            logger.info("RFID spatial markers enabled (gray→blue→green by confidence)")
 
         if self._connection_mode == "direct":
             self._start_direct()
@@ -226,31 +263,58 @@ class RfidModule(Module):
         self._last_rerun_ts = now
         self._log_to_rerun(array)
 
+    def _ensure_rerun_connection(self) -> None:
+        """Connect this worker to the RerunBridge gRPC proxy (once per process)."""
+        import rerun as rr
+
+        from dimos.core.global_config import global_config
+        from dimos.visualization.rerun.constants import RERUN_GRPC_PORT
+        from dimos.visualization.rerun.init import rerun_init
+
+        if not self._rerun_initialized:
+            rerun_init("dimos")
+            self._rerun_initialized = True
+
+        if self._rerun_connected:
+            return
+
+        host = (
+            getattr(global_config, "rerun_host", None)
+            or getattr(global_config, "listen_host", None)
+            or "127.0.0.1"
+        )
+        url = f"rerun+http://{host}:{RERUN_GRPC_PORT}/proxy"
+        rr.connect_grpc(url)
+        self._rerun_connected = True
+
     def _log_to_rerun(self, array: RfidTagArray) -> None:
-        """Push tag list straight to the Rerun gRPC server (same recording as the viewer)."""
+        """Push tag list to the Rerun RFID side panel over the bridge gRPC proxy."""
         try:
             import rerun as rr
-            from dimos.core.global_config import global_config
-            from dimos.visualization.rerun.bridge import RERUN_GRPC_PORT
-            from dimos.visualization.rerun.init import rerun_init
 
-            if not self._rerun_connected:
-                # Must share the bridge's app id ("dimos") or the panel stays empty.
-                rerun_init("dimos")
-                host = (
-                    getattr(global_config, "rerun_host", None)
-                    or getattr(global_config, "listen_host", None)
-                    or "127.0.0.1"
-                )
-                url = f"rerun+http://{host}:{RERUN_GRPC_PORT}/proxy"
-                rr.connect_grpc(url)
-                self._rerun_connected = True
+            self._ensure_rerun_connection()
 
-            rr.log(RFID_RERUN_ENTITY, array.to_rerun())
+            # Static panel: always visible while scrubbing dimos_time on the 3D map.
+            payload = array.to_rerun()
+            if isinstance(payload, rr.TextDocument):
+                rr.log(RFID_RERUN_ENTITY, payload, static=True)
+            else:
+                rr.log(RFID_RERUN_ENTITY, payload)
+
+            # Spatial markers follow the same timeline as lidar / odometry.
+            rr.set_time("dimos_time", timestamp=float(array.ts))
+            self._log_spatial(array)
         except Exception as exc:
-            # Bridge may not be up yet on first poll; retry next tick.
             self._rerun_connected = False
             logger.warning("Rerun RFID panel update failed (will retry): %s", exc)
+
+    def _log_spatial(self, array: RfidTagArray) -> None:
+        if self._spatial is None or not self._rerun_connected:
+            return
+        try:
+            self._spatial.update(array.tags)
+        except Exception as exc:
+            logger.debug("RFID spatial update failed: %s", exc)
 
     def _publish_tags(self, array: RfidTagArray, *, force: bool = False) -> None:
         self._latest = array
@@ -382,6 +446,8 @@ class RfidModule(Module):
 
     @rpc
     def stop(self) -> None:
+        if self._spatial is not None:
+            self._spatial.finalize()
         if self._scanner is not None:
             try:
                 self._scanner.stop()
