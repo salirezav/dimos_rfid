@@ -7,6 +7,11 @@
 #   export ROBOT_IP=$(./scripts/find_go2_ip.sh)
 #
 # Prints the IPv4 address on stdout and exits 0 if found, 1 otherwise.
+# Requires bash (Ubuntu's `sh` is dash and will fail on `set -o pipefail`).
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec bash "$0" "$@"
+fi
 
 set -euo pipefail
 

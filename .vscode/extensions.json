@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "ms-python.python",
+        "ms-python.debugpy"
+    ],
+    "unwantedRecommendations": [
+        "ms-python.vscode-python-envs"
+    ]
+}
